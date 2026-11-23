@@ -37,6 +37,7 @@ class Spot(BaseModel):
     name: str
     search_terms: list[str]
     narration: str
+    keywords: list[str] = []
     segments: list[Segment] = []
 
 
@@ -87,9 +88,14 @@ class _Segment(BaseModel):
 class _Spot(BaseModel):
     name: str = Field(description="Place name in English, short enough for an on-screen title")
     search_terms: list[str] = Field(
-        description="3-8 short English phrases for searching stock footage of this place, most specific first, "
-                    "covering different views and things nearby so there is varied footage, e.g. "
-                    "['Petronas Towers Kuala Lumpur', 'Petronas Towers night', 'KLCC park fountain', 'Kuala Lumpur skyline']")
+        description="3-6 short English phrases for searching photos and videos of THIS EXACT PLACE. Every phrase "
+                    "must contain the place's name (official, local or alternative spelling), never a nearby "
+                    "place or a general term, because whatever they find is shown while this place is narrated, "
+                    "e.g. ['Amber Fort Jaipur', 'Amer Fort', 'Amber Palace', 'Amer Fort Rajasthan']")
+    keywords: list[str] = Field(
+        description="1-5 lowercase English names that identify this place in photo tags, including spelling "
+                    "variants, e.g. ['amber fort', 'amer fort', 'amer palace', 'amber palace']. Never a generic "
+                    "word alone ('fort', 'temple', 'lake') and never just the city name")
     narration: str = Field(description="Voiceover for this place in the requested language, as long as the prompt asks")
 
 
@@ -162,10 +168,14 @@ def _prompt(city, country, settings):
          f"also be in {settings['language']}, with the place names in English.\n"
          f"Host personality: {settings['host_style']}.\n\n"
          f"LONG VIDEO, about {lay['minutes']:.0f} minutes: pick the {lay['places']} best places, in a sensible "
-         f"route order (mix famous sights with food streets, markets, viewpoints and day trips). "
+         f"route order. The footage comes from stock photo/video sites, so choose well-known, photogenic, "
+         f"NAMED places that have plenty of photos online (landmarks, forts, palaces, temples, famous markets "
+         f"and viewpoints, popular day trips); avoid unnamed or obscure spots. "
          f"Each place's narration must be about {lay['place_words']} words (~{lay['place_secs']:.0f} seconds "
-         f"spoken): what we're seeing, a little history or a story, how to reach, timings and rough budget, "
-         f"food nearby, an honest opinion or tip. Keep it flowing and varied, never padded or repetitive. "
+         f"spoken). Only pictures of that place are on screen while it is narrated, so talk mostly about the "
+         f"place itself: what we're seeing (architecture, views, details), its history or a story, then "
+         f"briefly how to reach, timings, entry fee/budget and an honest tip. Don't describe other places "
+         f"inside a place's narration. Keep it flowing and varied, never padded or repetitive. "
          f"Intro and outro: 15-25 words each.\n")
     if settings.get("shorts", {}).get("enabled"):
         p += (f"\nSHORT, {lay['short_secs']:.0f}-second vertical YouTube Short teasing the long video: "

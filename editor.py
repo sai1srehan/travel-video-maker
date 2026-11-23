@@ -52,6 +52,8 @@ def _free_start(c, L, used, rng):
     """A start time in clip c whose [start, start+L] hasn't been used yet, or None."""
     key = str(c.path)
     taken = used.setdefault(key, [])
+    if getattr(c, "is_photo", False):  # each photo is shown once
+        return None if taken else 0.0
     w0, w1 = _trimmed(c)
     if w1 - w0 < L + 0.3:  # short clip: usable once, from its beginning
         return None if taken else (c.start if c.end is not None else 0.0)
@@ -94,6 +96,11 @@ def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random, 
             pick = (c, w0 + rng.random() * max(0.0, w1 - w0 - L))
         c, start = pick
         used.setdefault(str(c.path), []).append((start, start + L))
+        out = work / f"cut_{tag}_{i:03d}.mp4"
+        if getattr(c, "is_photo", False):
+            _photo_cut(c.path, L, W, H, settings, rng, out)
+            cuts.append(out)
+            continue
         move = rng.random() < settings.get("camera_move_share", 0.35)
         if move:  # gentle drift, 4% overscan
             x = f"(iw-ow)*t/{L}" if rng.random() < 0.5 else f"(iw-ow)*(1-t/{L})"
@@ -103,11 +110,28 @@ def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random, 
             frame = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
         vf = (f"{frame},setsar=1,fps={FPS},{settings['color_grade']},"
               f"tpad=stop_mode=clone:stop_duration={L},format=yuv420p")  # hold last frame if clip is short
-        out = work / f"cut_{tag}_{i:03d}.mp4"
         ffmpeg(["-ss", f"{start:.2f}", "-i", c.path, "-t", L, "-vf", vf, "-an",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", out])
         cuts.append(out)
     return cuts
+
+
+def _photo_cut(img, L, W, H, settings, rng, out):
+    """A still photo as a moving shot (slow zoom in/out or pan), like a vlogger's photo montage."""
+    n = max(1, int(round(L * FPS)))
+    style = rng.choice(["in", "out", "left", "right"])
+    if style in ("in", "out"):
+        z = f"1+0.08*on/{n}" if style == "in" else f"1.08-0.08*on/{n}"
+        # upscale first so the zoom is smooth instead of jumping pixel by pixel
+        frame = (f"scale={W * 2}:{H * 2}:force_original_aspect_ratio=increase,crop={W * 2}:{H * 2},"
+                 f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS}")
+    else:
+        x = f"(iw-ow)*t/{L}" if style == "right" else f"(iw-ow)*(1-t/{L})"
+        frame = (f"scale={_even(W * 1.1)}:{_even(H * 1.1)}:force_original_aspect_ratio=increase,"
+                 f"crop={W}:{H}:x='{x}':y='(ih-oh)/2'")
+    vf = f"{frame},setsar=1,fps={FPS},{settings['color_grade']},format=yuv420p"
+    ffmpeg(["-loop", "1", "-framerate", FPS, "-t", L, "-i", img, "-vf", vf, "-frames:v", n, "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", out])
 
 
 LOWER_THIRD_SIZE = 0.06  # font size as a fraction of the frame's short side
@@ -189,13 +213,15 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
     section(intro_pool, voices["intro"], title, "intro")
     log("  intro done")
 
+    num = 0
     for i, (spot, clips) in enumerate(zip(plan.spots, spot_clips)):
         tag = f"s{i}"
         if not clips or tag not in voices:
             log(f"  ! no footage for {spot.name}, skipped")
             continue
+        num += 1  # on-screen number stays 1, 2, 3 ... even when a place was left out
         short = min(W, H)  # size by the short side so portrait titles aren't oversized
-        tf = _write_text(work, f"t_{tag}.txt", _wrap(f"{i + 1}. {spot.name}", W, short, LOWER_THIRD_SIZE))
+        tf = _write_text(work, f"t_{tag}.txt", _wrap(f"{num}. {spot.name}", W, short, LOWER_THIRD_SIZE))
         bottom = 0.3 if H > W else 0.1  # Shorts: keep clear of YouTube's caption/channel overlay
         section(clips, voices[tag], [_lower_third(tf, short, bottom=bottom)], tag)
         log(f"  {spot.name} done ({i + 1}/{len(plan.spots)})")

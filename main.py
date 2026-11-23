@@ -88,12 +88,13 @@ def write_plan(dest, settings):
     return make_plan(city, country, settings)
 
 
-def description(plan, credits):
+def description(plan, credits, spot_clips=None):
     yt = list({c.url: c for c in credits if c.source == "youtube"}.values())  # one credit per video
     wiki = sorted({c.credit for c in credits if c.source == "wikimedia"})
     stock = sorted({c.credit for c in credits if c.source in ("pexels", "pixabay")})
     desc = [plan.description, "", "Places in this video:"]
-    desc += [f"{i + 1}. {s.name}" for i, s in enumerate(plan.spots)]
+    shown = [s for i, s in enumerate(plan.spots) if spot_clips is None or spot_clips[i]]
+    desc += [f"{i + 1}. {s.name}" for i, s in enumerate(shown)]
     if yt:
         desc += ["", f"Footage used under Creative Commons Attribution (CC BY 3.0, {CC_BY}).",
                  "Clips were trimmed, re-edited, colour graded and given new narration. Original videos:"]
@@ -159,39 +160,46 @@ def main():
     if not any(map(os.getenv, ("PEXELS_API_KEY", "PIXABAY_API_KEY"))):
         log("  ! no PIXABAY_API_KEY / PEXELS_API_KEY - using Wikimedia Commons only (less footage)")
     seen, spot_clips = {s.url for s in plan.sources}, []
-    broll = []
-    if stock_ok:
-        log("  general footage of the destination (streets, food, transport ...)")
-        broll = footage.gather(plan.broll_terms or [f"{plan.city} {plan.country}".strip()],
-                               {**settings, "clips_per_place": lay["clips_per_place"] * 2},
-                               work / "clips", seen, log)
+    # Only footage whose tags/title name the place is used, so the picture always matches the voice.
+    shots = int(lay["place_secs"] / settings["cut_seconds"]) + 1
+    min_items = int(settings.get("min_footage_per_place", 4))
     for i, s in enumerate(plan.spots):
-        log(f"  {s.name}")
+        kws = footage.place_keywords(s, plan.city)
+        log(f"  {s.name}  (must match: {', '.join(kws)})")
         clips = footage.segment_clips(s, plan.sources, downloaded)
         if clips:
             log(f"    {len(clips)} shots from the source videos")
         if len(clips) < lay["clips_per_place"] and stock_ok and settings.get("fill_with_stock", True):
-            clips += footage.gather(s.search_terms, settings, work / "clips", seen, log)
-            if len(clips) < 2:  # broaden the search
-                clips += footage.gather([f"{s.name} {plan.city}"], settings, work / "clips", seen, log)
-        missing = min(4, lay["clips_per_place"] - len(clips))
-        if missing > 0 and broll:  # top up thin places with general destination footage
-            clips += [broll[(i * 3 + k) % len(broll)] for k in range(min(missing, len(broll)))]
+            terms = list(dict.fromkeys(s.search_terms + [f"{s.name} {plan.city}", s.name]))
+            clips += footage.gather(terms, settings, work / "clips", seen, log, keywords=kws, shots=shots)
+        videos = sum(not c.is_photo for c in clips)
+        if len(clips) < min_items:
+            log(f"    ! only {len(clips)} matching photos/videos - leaving {s.name} out rather than "
+                f"showing the wrong place")
+            for c in clips:
+                seen.discard(c.url)
+            clips = []
+        else:
+            log(f"    {videos} videos + {len(clips) - videos} photos")
         spot_clips.append(clips)
-    if not any(spot_clips):
-        sys.exit("No footage found for any place - check your API keys.")
+    kept = sum(1 for c in spot_clips if c)
+    if kept < 2:
+        sys.exit("Not enough matching footage for this destination - check PIXABAY_API_KEY, or try a better-known place.")
+    if kept < len(plan.spots):
+        log(f"  {kept} of {len(plan.spots)} places have matching footage - the video will be shorter")
 
     # 3. Voice
     log("3/5 voiceover")
     voices = record_voices({"intro": plan.intro_narration, "outro": plan.outro_narration,
-                            **{f"s{i}": s.narration for i, s in enumerate(plan.spots)}}, work, settings)
+                            **{f"s{i}": s.narration for i, s in enumerate(plan.spots) if spot_clips[i]}},
+                           work, settings)
 
     # 4. Edit
     log("4/5 editing the long video")
     credits = [c for cl in spot_clips for c in cl]
     video = build_video(plan, spot_clips, voices, credits, settings, work, out_dir, log)
     log(f"  length: {duration(video) / 60:.1f} min")
-    desc = description(plan, credits)
+    desc = description(plan, credits, spot_clips)
     (out_dir / "upload.txt").write_text(
         f"TITLE:\n{plan.title}\n\nDESCRIPTION:\n{desc}\n\nTAGS:\n{', '.join(plan.tags)}\n", encoding="utf-8")
 
@@ -262,7 +270,7 @@ def make_short(plan: VideoPlan, spot_clips, long_url, folder: Path, settings, ar
     log(f"  Short length: {secs:.0f} s")
     if secs > 180:
         log("  ! longer than 3 minutes - YouTube will treat it as a normal video, not a Short")
-    desc = description(splan, credits) + "\n#shorts"
+    desc = description(splan, credits, clips) + "\n#shorts"
     title = f"{splan.title[:88]} #shorts"
     (folder / "upload.txt").write_text(f"TITLE:\n{title}\n\nDESCRIPTION:\n{desc}\n", encoding="utf-8")
     return publish(video, None, title, desc, plan.tags, folder, settings, args)

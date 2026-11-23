@@ -36,13 +36,46 @@ class Clip:
     def window(self):
         return self.start, (self.end if self.end is not None else self.duration)
 
+    @property
+    def is_photo(self):
+        return Path(self.path).suffix.lower() in PHOTO_EXTS
+
+
+PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+PHOTO_SECONDS = 6.0  # a photo is shown once, for one shot, with a slow zoom or pan
+
+
+def _norm(text: str) -> str:
+    return " " + re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() + " "
+
+
+def matches(text: str, keywords: list[str]) -> bool:
+    """True if the photo/video's tags or title name the place (any keyword, whole words)."""
+    t = _norm(text)
+    return any(_norm(k) in t for k in keywords if k.strip())
+
+
+GENERIC = set("""the of and a in at fort palace temple lake beach market bazaar street road garden gardens park
+museum city old new view point viewpoint hill hills falls waterfall river island national tower towers gate
+square mosque church cathedral station bridge food night day trip sunset sunrise area village district center
+centre mall india""".split())
+
+
+def place_keywords(spot, city: str) -> list[str]:
+    """Words that must appear in a clip's tags/title for it to count as showing this place."""
+    kws = [k for k in getattr(spot, "keywords", None) or [] if k.strip()]
+    if kws:
+        return kws
+    words = [w for w in re.findall(r"[a-z0-9]+", spot.name.lower()) if w not in GENERIC and w not in _norm(city)]
+    return [spot.name] + ([" ".join(words)] if words else [])
+
 
 def yt_credit(title, channel, url):
     return f"\"{title}\" by {channel} - CC BY, {url}"
 
 
-def _download(url: str, dest_dir: Path, prefix: str) -> Path:
-    name = prefix + "_" + hashlib.md5(url.encode()).hexdigest()[:12] + ".mp4"
+def _download(url: str, dest_dir: Path, prefix: str, ext: str = ".mp4") -> Path:
+    name = prefix + "_" + hashlib.md5(url.encode()).hexdigest()[:12] + ext
     path = dest_dir / name
     if path.exists() and path.stat().st_size > 0:
         return path
@@ -87,9 +120,13 @@ def search_pexels(query, n, orientation, target_w):
     out = []
     for v in r.json().get("videos", []):
         f = _pick_file([x for x in v["video_files"] if x.get("file_type") == "video/mp4"], target_w)
-        if f:
-            out.append(("pexels", f["link"], f"{v['user']['name']} (Pexels)", v["url"]))
+        if f:  # the page URL slug is the video's title, e.g. /video/amber-fort-jaipur-12345/
+            out.append(_hit("pexels", f["link"], f"{v['user']['name']} (Pexels)", v["url"], v["url"]))
     return out
+
+
+def _hit(source, link, credit, page, text, photo=False):
+    return {"source": source, "link": link, "credit": credit, "page": page, "text": text, "photo": photo}
 
 
 def search_pixabay(query, n, target_w):
@@ -105,7 +142,60 @@ def search_pixabay(query, n, target_w):
         files = [dict(v, link=v.get("url")) for v in h["videos"].values() if v.get("url")]
         f = _pick_file(files, target_w)
         if f:
-            out.append(("pixabay", f["link"], f"{h['user']} (Pixabay)", h["pageURL"]))
+            out.append(_hit("pixabay", f["link"], f"{h['user']} (Pixabay)", h["pageURL"],
+                            f"{h.get('tags', '')} {h['pageURL']}"))
+    return out
+
+
+def search_pixabay_photos(query, n, orientation):
+    """Pixabay photos (free for commercial use, no attribution needed) - landmarks have many more
+    photos than videos, so these cover places with little video footage."""
+    key = os.getenv("PIXABAY_API_KEY")
+    if not key:
+        return []
+    r = requests.get("https://pixabay.com/api/", headers=UA, timeout=30, params={
+        "key": key, "q": query[:100], "image_type": "photo", "per_page": max(3, min(200, n)),
+        "orientation": "vertical" if orientation == "portrait" else "horizontal",
+        "min_width": 1280, "safesearch": "true"})
+    r.raise_for_status()
+    out = []
+    for h in r.json().get("hits", [])[:n]:
+        link = h.get("largeImageURL") or h.get("webformatURL")
+        if link:
+            out.append(_hit("pixabay", link, f"{h['user']} (Pixabay)", h["pageURL"],
+                            f"{h.get('tags', '')} {h['pageURL']}", photo=True))
+    return out
+
+
+_NOT_PHOTOS = ("map", "plan", "logo", "diagram", "coat of arms", "stamp", "flag", "drawing", "painting",
+               "sketch", "ticket", "sign", "chart", "svg")
+
+
+def search_wikimedia_photos(query, n, target_w):
+    """CC0 / public domain / CC BY photos from Wikimedia Commons (share-alike ones are skipped)."""
+    r = requests.get("https://commons.wikimedia.org/w/api.php", headers=UA, timeout=30, params={
+        "action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
+        "gsrsearch": f"filetype:bitmap {query}", "gsrlimit": 50,
+        "prop": "imageinfo", "iiprop": "url|size|extmetadata", "iiurlwidth": max(1920, target_w)})
+    r.raise_for_status()
+    out = []
+    for page in (r.json().get("query", {}).get("pages") or {}).values():
+        info = (page.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+        lic = meta.get("LicenseShortName", {}).get("value", "")
+        if not _commercial_ok(lic) or (info.get("width") or 0) < 1600:
+            continue
+        title = page["title"].removeprefix("File:").rsplit(".", 1)[0]
+        artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "")).strip() or "Unknown"
+        if any(x in title.lower() for x in _NOT_PHOTOS) or "google" in artist.lower():
+            continue
+        about = title + " " + re.sub(r"<[^>]+>", " ", meta.get("ImageDescription", {}).get("value", ""))
+        pageurl = info.get("descriptionurl", "")
+        link = info.get("thumburl") or info.get("url")
+        out.append(_hit("wikimedia", link, f"{artist} (Wikimedia Commons) - \"{title}\", {lic}, {pageurl}",
+                        pageurl, about, photo=True))
+        if len(out) >= n:
+            break
     return out
 
 
@@ -145,7 +235,8 @@ def search_wikimedia(query, n, target_w):
         if not all(w in about for w in words) or "google" in artist.lower():
             continue  # off-topic search hit, or Google Earth imagery (own terms of use)
         pageurl = info.get("descriptionurl", "")
-        out.append(("wikimedia", link, f"{artist} (Wikimedia Commons) - \"{title}\", {lic}, {pageurl}", pageurl))
+        out.append(_hit("wikimedia", link, f"{artist} (Wikimedia Commons) - \"{title}\", {lic}, {pageurl}",
+                        pageurl, about))
         if len(out) >= n:
             break
     return out
@@ -172,7 +263,8 @@ def search_youtube_cc(query, n, days):
         vid = it["id"]["videoId"]
         sn = it["snippet"]
         url = f"https://www.youtube.com/watch?v={vid}"
-        out.append(("youtube", url, yt_credit(sn["title"], sn["channelTitle"], url), url))
+        out.append(_hit("youtube", url, yt_credit(sn["title"], sn["channelTitle"], url), url,
+                        f"{sn['title']} {sn.get('description', '')}"))
     return out
 
 
@@ -271,44 +363,79 @@ def _download_youtube(url: str, dest_dir: Path) -> Path | None:
         return p if p.exists() else None
 
 
-def gather(terms, settings, dest_dir: Path, seen: set, log=print) -> list[Clip]:
+def _search(term, settings, photos: bool, per: int, target_w: int, log) -> list[dict]:
+    o = settings["orientation"]
+    if photos:
+        fns = [lambda: search_pixabay_photos(term, per, o),
+               lambda: search_wikimedia_photos(term, per, target_w) if settings.get("use_wikimedia", True) else []]
+    else:
+        fns = [lambda: search_pexels(term, per, o, target_w),
+               lambda: search_pixabay(term, per, target_w),
+               lambda: search_wikimedia(term, 3, target_w) if settings.get("use_wikimedia", True) else [],
+               lambda: search_youtube_cc(term, 2, settings["youtube_days"]) if settings.get("use_youtube_cc") else []]
+    hits = []
+    for fn in fns:
+        try:
+            hits += fn()
+        except requests.RequestException as e:
+            log(f"    search error for '{term}': {e}")
+    return hits
+
+
+def gather(terms, settings, dest_dir: Path, seen: set, log=print, keywords=None, shots=None) -> list[Clip]:
+    """Footage that really shows the place: every hit's tags/title must contain one of `keywords`.
+
+    Videos first (up to clips_per_place), then photos until roughly `shots` shots are covered.
+    """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    want = settings["clips_per_place"]
+    want_videos = settings["clips_per_place"]
+    shots = shots or want_videos
     vertical = settings["orientation"] == "portrait"
     target_w = 1080 if vertical else 1920
+    cut = float(settings.get("cut_seconds", 3.5))
     clips: list[Clip] = []
+    rejected = 0
 
-    for term in terms:
-        if len(clips) >= want:
-            break
-        candidates = []
-        per = max(4, min(10, want - len(clips)))  # results per source for this search term
-        for fn in (lambda: search_pexels(term, per, settings["orientation"], target_w),
-                   lambda: search_pixabay(term, per, target_w),
-                   lambda: search_wikimedia(term, 3, target_w) if settings.get("use_wikimedia", True) else [],
-                   lambda: search_youtube_cc(term, 2, settings["youtube_days"])
-                   if settings.get("use_youtube_cc") else []):
-            try:
-                candidates += fn()
-            except requests.RequestException as e:
-                log(f"    search error for '{term}': {e}")
-        for source, link, credit, page in candidates:
-            if len(clips) >= want:
+    def covered():  # rough number of shots the footage so far can give without repeats
+        return sum(1 if c.is_photo else max(1, int(c.duration * 0.84 // (cut * 1.1))) for c in clips)
+
+    for photos in (False, True):
+        for term in terms:
+            if (not photos and len(clips) >= want_videos) or covered() >= shots:
                 break
-            if page in seen:
-                continue
-            try:
-                path = (_download_youtube(link, dest_dir) if source == "youtube"
-                        else _download(link, dest_dir, source))
-            except Exception as e:  # network / extractor errors: skip this clip
-                log(f"    skip {page}: {e}")
-                continue
-            if not path:
-                continue
-            d = duration(path)
-            if d < 2:  # broken or unreadable file
-                continue
-            seen.add(page)
-            clips.append(Clip(path, d, source, credit, page))
-            log(f"    + {source}: {page} ({d:.0f}s)")
+            per = 20 if photos else max(4, min(10, want_videos - len(clips)))
+            for hit in _search(term, settings, photos, per, target_w, log):
+                if (not photos and len(clips) >= want_videos) or covered() >= shots:
+                    break
+                if hit["page"] in seen:
+                    continue
+                if keywords and not matches(hit["text"], keywords):
+                    rejected += 1  # e.g. a lake when we asked for a fort: never show the wrong place
+                    continue
+                src = hit["source"]
+                try:
+                    if src == "youtube":
+                        path = _download_youtube(hit["link"], dest_dir)
+                    else:
+                        path = _download(hit["link"], dest_dir, src, ".jpg" if hit["photo"] else ".mp4")
+                except Exception as e:  # network / extractor errors: skip this one
+                    seen.add(hit["page"])  # don't retry it for the next search term
+                    log(f"    skip {hit['page']}: {str(e)[:120]}")
+                    continue
+                if not path:
+                    continue
+                if hit["photo"]:
+                    if path.stat().st_size < 30_000:  # broken / tiny image
+                        continue
+                    clip = Clip(path, PHOTO_SECONDS, src, hit["credit"], hit["page"], 0.0, PHOTO_SECONDS)
+                else:
+                    d = duration(path)
+                    if d < 2:  # broken or unreadable file
+                        continue
+                    clip = Clip(path, d, src, hit["credit"], hit["page"])
+                seen.add(hit["page"])
+                clips.append(clip)
+                log(f"    + {src} {'photo' if hit['photo'] else 'video'}: {hit['page']}")
+    if rejected:
+        log(f"    ({rejected} search results skipped: their tags don't mention this place)")
     return clips
