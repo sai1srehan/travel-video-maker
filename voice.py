@@ -30,8 +30,9 @@ def _gemini(text, out: Path, settings):
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     style = settings.get("voice_style", "Say this like a cheerful, friendly travel vlogger talking to friends")
     lang = LANG_CODES.get(settings.get("language", "").lower())
+    import gemini_models
     resp = client.models.generate_content(
-        model=settings.get("tts_model", "gemini-2.5-flash-preview-tts"),
+        model=gemini_models.resolve(client, settings.get("tts_model"), "tts"),
         contents=f"{style}:\n{text}",
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],

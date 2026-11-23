@@ -11,7 +11,9 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-MODEL = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+import gemini_models
+
+MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.8-flash"  # auto-replaced if not available to your key
 
 
 # ---- stored plan (plan.json) ----------------------------------------------------------
@@ -175,7 +177,7 @@ def _prompt(city, country, settings):
 def _ask(contents, schema, system):
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     response = client.models.generate_content(
-        model=MODEL, contents=contents,
+        model=gemini_models.resolve(client, MODEL, "text"), contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",
