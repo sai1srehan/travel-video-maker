@@ -19,14 +19,21 @@ LANG_CODES = {"telugu": "te-IN", "hindi": "hi-IN", "tamil": "ta-IN", "kannada": 
 
 def _edge(text, out: Path, voice, rate):
     import edge_tts
-    asyncio.run(edge_tts.Communicate(text, voice, rate=rate).save(str(out)))
-    return out
+    last = None
+    for attempt in range(3):
+        try:  # the Edge service occasionally stalls; don't let it hang the run
+            asyncio.run(asyncio.wait_for(edge_tts.Communicate(text, voice, rate=rate).save(str(out)), 180))
+            return out
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"Edge voice failed 3 times: {last!r}")
 
 
 def _gemini(text, out: Path, settings):
     from google import genai
     from google.genai import types
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"],
+                          http_options=types.HttpOptions(timeout=180_000))  # ms; a stuck request must not hang the run
     style = settings.get("voice_style", "Say this like a cheerful, friendly travel vlogger talking to friends")
     lang = LANG_CODES.get(settings.get("language", "").lower())
     import gemini_models

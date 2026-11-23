@@ -33,8 +33,12 @@ HISTORY = ROOT / "output" / "history.json"
 CC_BY = "https://creativecommons.org/licenses/by/3.0/"
 
 
-def log(msg):
-    print(msg, flush=True)
+_T0 = __import__("time").monotonic()
+
+
+def log(msg):  # elapsed minutes in front, so a slow step is easy to spot in the GitHub log
+    m = (__import__("time").monotonic() - _T0) / 60
+    print(f"[{m:5.1f}m] {msg}", flush=True)
 
 
 def pick_destination():

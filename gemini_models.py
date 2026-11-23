@@ -79,8 +79,10 @@ def resolve(client, preferred: str | None, kind: str = "text") -> str:
 
 def _retryable(e: Exception) -> bool:
     code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    text = f"{type(e).__name__} {e}"
     return code in (429, 500, 502, 503, 504) or any(
-        s in str(e) for s in ("UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded", "high demand", "DEADLINE"))
+        s in text for s in ("UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded", "high demand", "DEADLINE",
+                            "Timeout", "timed out", "ConnectError", "RemoteProtocolError"))
 
 
 def generate(client, preferred, kind, waits=(30, 60, 120, 240), log=print, **kwargs):

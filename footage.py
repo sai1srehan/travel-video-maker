@@ -10,6 +10,7 @@ Regular (Standard YouTube License) videos are never downloaded.
 import hashlib
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,14 +46,25 @@ def _download(url: str, dest_dir: Path, prefix: str) -> Path:
     path = dest_dir / name
     if path.exists() and path.stat().st_size > 0:
         return path
-    with requests.get(url, stream=True, timeout=60, headers=UA) as r:
+    started, size = time.monotonic(), 0
+    tmp = path.with_suffix(".part")
+    with requests.get(url, stream=True, timeout=(15, 30), headers=UA) as r:
         r.raise_for_status()
-        tmp = path.with_suffix(".part")
         with open(tmp, "wb") as f:
             for chunk in r.iter_content(1 << 20):
                 f.write(chunk)
-        tmp.replace(path)
+                size += len(chunk)
+                # a slow server or a huge file can stall the whole run: give up and use other footage
+                if time.monotonic() - started > MAX_DOWNLOAD_SECS or size > MAX_DOWNLOAD_BYTES:
+                    f.close()
+                    tmp.unlink(missing_ok=True)
+                    raise RuntimeError(f"too slow/too big ({size >> 20} MB in {time.monotonic() - started:.0f}s)")
+    tmp.replace(path)
     return path
+
+
+MAX_DOWNLOAD_SECS = 120
+MAX_DOWNLOAD_BYTES = 200 << 20
 
 
 def _pick_file(files, target_w):

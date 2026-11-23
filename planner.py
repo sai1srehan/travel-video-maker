@@ -175,7 +175,8 @@ def _prompt(city, country, settings):
 
 
 def _ask(contents, schema, system):
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"],
+                          http_options=types.HttpOptions(timeout=600_000))  # ms; a long script can take minutes
     response = gemini_models.generate(
         client, MODEL, "text", contents=contents,
         config=types.GenerateContentConfig(

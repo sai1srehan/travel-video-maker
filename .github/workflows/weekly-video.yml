@@ -33,7 +33,9 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Make and upload the videos
+        timeout-minutes: 220   # leaves time for the save steps below even if this one runs long
         env:
+          PYTHONUNBUFFERED: "1"   # show progress in the log live, not all at the end
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
