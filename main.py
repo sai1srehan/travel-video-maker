@@ -82,13 +82,16 @@ def write_plan(dest, settings):
 
 def description(plan, credits):
     yt = list({c.url: c for c in credits if c.source == "youtube"}.values())  # one credit per video
-    stock = sorted({c.credit for c in credits if c.source != "youtube"})
+    wiki = sorted({c.credit for c in credits if c.source == "wikimedia"})
+    stock = sorted({c.credit for c in credits if c.source in ("pexels", "pixabay")})
     desc = [plan.description, "", "Places in this video:"]
     desc += [f"{i + 1}. {s.name}" for i, s in enumerate(plan.spots)]
     if yt:
         desc += ["", f"Footage used under Creative Commons Attribution (CC BY 3.0, {CC_BY}).",
                  "Clips were trimmed, re-edited, colour graded and given new narration. Original videos:"]
         desc += [f"- {c.credit}" for c in yt]
+    if wiki:
+        desc += ["", "Wikimedia Commons footage (edited):"] + [f"- {w}" for w in wiki]
     if stock:
         desc += ["", "Stock footage: " + ", ".join(stock)]
     desc += ["", " ".join("#" + re.sub(r"\W+", "", t) for t in plan.tags[:8])]
@@ -154,11 +157,16 @@ def main():
 
     # 3. Voice
     log("3/5 voiceover")
-    v, rate = settings["voice"], settings["voice_rate"]
-    voices = {"intro": speak(plan.intro_narration, work / "v_intro.mp3", v, rate),
-              "outro": speak(plan.outro_narration, work / "v_outro.mp3", v, rate)}
+    voices = {"intro": speak(plan.intro_narration, work / "v_intro", settings, log),
+              "outro": speak(plan.outro_narration, work / "v_outro", settings, log)}
     for i, s in enumerate(plan.spots):
-        voices[f"s{i}"] = speak(s.narration, work / f"v_s{i}.mp3", v, rate)
+        voices[f"s{i}"] = speak(s.narration, work / f"v_s{i}", settings, log)
+    if len({p.suffix for p in voices.values()}) > 1:  # Gemini failed half-way: redo all in one voice
+        log("  re-recording everything with the Edge voice so the video has one voice")
+        edge = {**settings, "tts_engine": "edge"}
+        texts = {"intro": plan.intro_narration, "outro": plan.outro_narration,
+                 **{f"s{i}": s.narration for i, s in enumerate(plan.spots)}}
+        voices = {k: speak(t, work / f"v_{k}", edge, log) for k, t in texts.items()}
 
     # 4. Edit
     log("4/5 editing")

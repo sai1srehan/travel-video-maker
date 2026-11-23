@@ -41,13 +41,21 @@ def prepare_font(work: Path, settings):
 
 
 def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random):
-    """Render enough short, graded, panning shots to cover `total` seconds."""
+    """Render enough graded shots to cover `total` seconds.
+
+    Like a hand-edited vlog: shot lengths vary (0.7x-1.6x cut_seconds), most shots are straight cuts,
+    and only some get a slow push/pan, alternating direction.
+    """
     W, H = _size(settings)
-    L = settings["cut_seconds"]
-    n = max(1, math.ceil(total / L))
+    base = settings["cut_seconds"]
+    lengths, acc = [], 0.0
+    while acc < total:
+        L = round(rng.uniform(base * 0.7, base * 1.6), 2)
+        lengths.append(L)
+        acc += L
     uses = {}
     cuts = []
-    for i in range(n):
+    for i, L in enumerate(lengths):
         c = clips[i % len(clips)]
         key = (c.path, c.start, c.end)
         k = uses.get(key, 0)
@@ -62,10 +70,15 @@ def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random):
             start = lo + frac * (hi - lo)
         else:  # short window: start at its beginning (whole short stock clip: from 0)
             start = c.start if c.end is not None else 0
-        pan = "(iw-ow)*t/{L}" if i % 2 == 0 else "(iw-ow)*(1-t/{L})"
-        vf = (f"scale={_even(W * 1.08)}:{_even(H * 1.08)}:force_original_aspect_ratio=increase,"
-              f"crop={W}:{H}:x='{pan.format(L=L)}':y='(ih-oh)/2',"
-              f"setsar=1,fps={FPS},{settings['color_grade']},format=yuv420p")
+        move = rng.random() < settings.get("camera_move_share", 0.35)
+        if move:  # gentle drift, 4% overscan
+            x = f"(iw-ow)*t/{L}" if rng.random() < 0.5 else f"(iw-ow)*(1-t/{L})"
+            frame = (f"scale={_even(W * 1.04)}:{_even(H * 1.04)}:force_original_aspect_ratio=increase,"
+                     f"crop={W}:{H}:x='{x}':y='(ih-oh)/2'")
+        else:  # straight cut, just fill the frame
+            frame = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
+        vf = (f"{frame},setsar=1,fps={FPS},{settings['color_grade']},"
+              f"tpad=stop_mode=clone:stop_duration={L},format=yuv420p")  # hold last frame if clip is short
         out = work / f"cut_{tag}_{i:02d}.mp4"
         ffmpeg(["-ss", f"{start:.2f}", "-i", c.path, "-t", L, "-vf", vf, "-an",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", out])
@@ -112,6 +125,19 @@ def make_segment(cuts, voice_mp3: Path, overlays: list[str], work: Path, tag: st
     return out
 
 
+def _pick_music(settings, rng):
+    """A random track from assets/music/ (different each week), else settings['music_file']."""
+    here = Path(__file__).parent
+    folder = here / "assets" / "music"
+    tracks = sorted(p for p in folder.glob("*") if p.suffix.lower() in (".mp3", ".m4a", ".wav", ".ogg")) \
+        if folder.is_dir() else []
+    if tracks:
+        return rng.choice(tracks)
+    f = Path(settings.get("music_file") or "")
+    f = f if f.is_absolute() else here / f
+    return f if f.is_file() else None
+
+
 def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir: Path, log=print):
     """spot_clips: list[list[Clip]] aligned with plan.spots; voices: dict tag -> mp3 path."""
     W, H = _size(settings)
@@ -146,7 +172,8 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
     all_clips = [c for cl in spot_clips for c in cl]
     total = duration(voices["outro"]) + PAD
     cuts = make_cuts(all_clips[-3:] or all_clips, total, settings, work, "outro", rng)
-    names = sorted({c.credit.split(" - ")[0] if c.source == "youtube" else c.credit for c in credits})
+    names = sorted({c.credit.split(" - ")[0] if c.source in ("youtube", "wikimedia") else c.credit
+                    for c in credits})
     shown = names[:6] + ([f"+ {len(names) - 6} more"] if len(names) > 6 else [])
     tc = _write_text(work, "t_credits.txt", "Footage\n" + "\n".join(shown) + "\n\nFull credits in description")
     segments.append(make_segment(cuts, voices["outro"], [
@@ -161,10 +188,9 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
     ffmpeg(["-f", "concat", "-safe", "0", "-i", lst.name, "-c", "copy", joined.name], cwd=work)
 
     final = out_dir / "video.mp4"
-    music = Path(settings.get("music_file") or "")
-    if not music.is_absolute():
-        music = Path(__file__).parent / music
-    if music.is_file():
+    music = _pick_music(settings, rng)
+    if music:
+        log(f"  music: {music.name}")
         vol = settings.get("music_volume", 0.12)
         total_d = duration(joined)
         ffmpeg(["-i", joined, "-stream_loop", "-1", "-i", music, "-filter_complex",
@@ -173,7 +199,7 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 "-shortest", final])
     else:
-        log("  (no music file found - add one at assets/music.mp3 for background music)")
+        log("  (no music found - add royalty-free tracks to assets/music/ for background music)")
         shutil.copy(joined, final)
 
     # Thumbnail

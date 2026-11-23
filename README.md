@@ -1,101 +1,81 @@
-# Weekly Travel Video Maker
+# Weekly Telugu Travel Video Maker
 
-Every week this picks one destination (or one you choose, e.g. `--city Malaysia`) and:
+Runs on GitHub every Sunday, no PC needed. It's completely free (all services used have free tiers).
+For each week's destination it:
 
-1. Searches YouTube for the **most-viewed Creative Commons (CC BY) videos** of that place and takes the top 2.
-2. Gemini **watches both videos**, picks the best places shown in them (Petronas Towers, Batu Caves, ...),
-   notes the exact timestamps where each place is on screen, and writes a **Telugu** voiceover for those shots.
-3. The editor cuts between both videos place by place, with quick graded shots, titles and a fade between sections.
-   Places with too few shots are filled with Pexels/Pixabay stock footage.
-4. An AI voice (Microsoft Edge neural TTS) reads the narration, background music is mixed in.
-5. The video, thumbnail, title, description (with the required CC credits) and tags are **uploaded to your channel**.
+1. **Script:** Gemini picks the best places and writes a Telugu voiceover that sounds like a
+   real Telugu travel YouTuber: casual Telugu with everyday English words, tips, budget, humour, no AI clichés.
+2. **Footage:** downloads shots of each place from **Pexels**, **Pixabay** and **Wikimedia Commons**,
+   all free and safe for monetization. From Wikimedia only CC0, public domain and CC BY are used.
+3. **Voice:** Gemini's speech voice (natural, expressive Telugu); Edge TTS is the automatic backup.
+4. **Editing:** hand-edit style: shot lengths vary, mostly straight cuts with some slow camera drift,
+   colour grade, place-name titles, background music (a different track each week), credits.
+5. **Upload:** video, thumbnail, title, description (with all required credits) and tags go to your channel.
 
-Output per video in `output/<week>_<city>/`: `video.mp4`, `thumbnail.jpg`, `upload.txt`, `plan.json`, `youtube_url.txt`.
+Each run's files are also saved as a GitHub artifact: `video.mp4`, `thumbnail.jpg`, `upload.txt`, `plan.json`.
 
-## Why only Creative Commons videos
+## Setup (all in the browser, once)
 
-Re-uploading other creators' normal YouTube videos, even trimmed, mixed and re-voiced, gets Content ID
-claims and copyright strikes, and channels built from them fail YouTube's "reused content" monetization review.
-CC BY videos are licensed for reuse as long as you credit them, which this app does automatically
-(on screen and in the description). Every video's licence is checked twice (search filter + per-video `status.license`).
-Your own narration, place selection and editing are what make the result original.
+### 1. Keys (free)
 
-| Source | Licence | Credit needed |
-|---|---|---|
-| YouTube Creative Commons | CC BY 3.0 | **Yes**: added automatically |
-| Pexels / Pixabay | Free, commercial use OK | No (credited anyway) |
+| Secret | Get it |
+|---|---|
+| `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+| `PEXELS_API_KEY` | https://www.pexels.com/api/ |
+| `PIXABAY_API_KEY` | https://pixabay.com/api/docs/ |
+| `YOUTUBE_TOKEN_JSON` | step 2 |
 
-## Keys you need
+Wikimedia Commons needs no key.
 
-| Key | Needed for | Get it |
-|---|---|---|
-| `GEMINI_API_KEY` | script + watching the videos | https://aistudio.google.com/apikey |
-| `YOUTUBE_API_KEY` | finding CC videos | Google Cloud → enable **YouTube Data API v3** → Credentials → API key |
-| `PEXELS_API_KEY` | filling gaps (optional) | https://www.pexels.com/api/ |
-| `PIXABAY_API_KEY` | filling gaps (optional) | https://pixabay.com/api/docs/ |
-| `token.json` / `YOUTUBE_TOKEN_JSON` | uploading to your channel | see below |
+### 2. YouTube upload login
 
-## Auto-upload to YouTube (one-time setup, on your PC)
+1. https://console.cloud.google.com → create a project → **APIs & Services → Library** → enable **YouTube Data API v3**.
+2. **OAuth consent screen** → External → app name + your email → add yourself under **Test users** →
+   click **Publish app** (otherwise the login expires every 7 days). No Google verification needed for your own channel.
+3. **Credentials → Create credentials → OAuth client ID → Desktop app** → download the JSON.
+4. Create `token.json` once by running `python youtube_upload.py --login` with that file saved as
+   `client_secret.json` next to it. This one step needs a computer with Python, any computer for a minute,
+   or ask a friend. Then paste the whole content of `token.json` into the GitHub secret `YOUTUBE_TOKEN_JSON`.
 
-1. https://console.cloud.google.com → create a project → **APIs & Services → Library** → enable **YouTube Data API v3**
-   (the same project can hold your `YOUTUBE_API_KEY`).
-2. **OAuth consent screen** → External → fill in app name + your email → add yourself under **Test users**.
-   Then click **Publish app** (status "In production"). In "Testing" status the login expires every 7 days,
-   which breaks the weekly run. You don't need Google's verification for your own channel.
-3. **Credentials → Create credentials → OAuth client ID → Desktop app** → download the JSON and save it in this
-   folder as `client_secret.json`.
-4. Run `python youtube_upload.py --login`. A browser opens: pick your channel's Google account. If it says
-   "Google hasn't verified this app", click **Advanced → Go to ... (unsafe)**; it's your own app.
-   This saves `token.json`.
-5. For GitHub: open `token.json`, copy everything, and save it as the repo secret `YOUTUBE_TOKEN_JSON`.
+Never commit `client_secret.json` or `token.json` (they're in `.gitignore`).
 
-`client_secret.json` and `token.json` are in `.gitignore`. Never commit them.
+### 3. GitHub
 
-**Videos upload as Private.** YouTube locks API uploads from new, unaudited Google Cloud projects to private.
-Check the video in YouTube Studio and switch it to Public yourself (good practice anyway). To publish
-automatically, pass YouTube's API audit (https://support.google.com/youtube/contact/yt_api_form) and then set
-`"privacy": "public"` in `settings.json`. To set custom thumbnails, verify your channel at https://www.youtube.com/verify.
+1. Push this folder to your repo.
+2. **Settings → Secrets and variables → Actions**: add the secrets above.
+3. **Settings → Actions → General → Workflow permissions → Read and write**.
+4. **Actions → Weekly travel video → Run workflow** to test. Type a place (e.g. `Malaysia`) or leave it empty.
 
-## Run on GitHub (weekly, automatic)
+### 4. Music (recommended)
 
-1. Push this folder to a GitHub repo.
-2. **Settings → Secrets and variables → Actions → New repository secret**: `GEMINI_API_KEY`, `YOUTUBE_API_KEY`,
-   `YOUTUBE_TOKEN_JSON`, and optionally `PEXELS_API_KEY`, `PIXABAY_API_KEY`.
-3. **Settings → Actions → General → Workflow permissions → Read and write** (so it can save `output/history.json`).
-4. **Actions → Weekly travel video → Run workflow** to test. Type a city (e.g. `Malaysia`) or leave it empty.
+Download a few royalty-free tracks from the YouTube Audio Library (YouTube Studio → Audio Library,
+pick ones marked "no attribution required") and upload them to `assets/music/` in your repo
+(GitHub → Add file → Upload files). A different track is picked each week.
 
-It then runs every Sunday at 09:00 IST and moves to the next place in `destinations.json`.
+## Good to know
 
-> Note: YouTube often blocks video downloads from GitHub's servers ("confirm you're not a bot").
-> Gemini can still watch the videos and write the script, but the shots then come from Pexels/Pixabay.
-> For videos that really use the YouTube footage, run it on your own PC.
+- **Uploads are Private.** YouTube keeps API uploads from new Google Cloud projects private until the project
+  passes YouTube's API audit (https://support.google.com/youtube/contact/yt_api_form). Until then, open
+  YouTube Studio and click Public. After the audit, set `"privacy": "public"` in `settings.json`.
+- **Custom thumbnails** need a verified channel: https://www.youtube.com/verify
+- **Monetization:** YouTube's "inauthentic content" policy targets channels that mass-produce near-identical
+  videos. What helps most: review each video before making it public, edit `plan.json` when something's off,
+  and add your own touch (your face in the thumbnail, your own voice for the intro) when you can.
+- **Free tier limits:** Gemini's free speech quota is small. If it runs out, that week's video uses the Edge voice.
 
-## Run on your PC
-
-```
-pip install -r requirements.txt
-winget install DenoLand.Deno          # yt-dlp needs it to download from YouTube
-copy .env.example .env                # then fill in your keys
-python youtube_upload.py --login      # once, for auto-upload
-python main.py --city Malaysia
-python main.py                        # this week's destination
-python main.py --portrait             # Shorts / Reels
-python main.py --plan-only            # only write the script
-python main.py --no-upload            # make the video, don't upload
-```
-
-To change the script, edit `output/<week>_<city>/plan.json` and run again. It reuses your edited plan.
-
-## Settings: `settings.json`
+## Change the style: `settings.json`
 
 | Setting | What it does |
 |---|---|
-| `language`, `voice`, `voice_rate` | Narration language and TTS voice: `te-IN-MohanNeural` / `te-IN-ShrutiNeural` (Telugu), `hi-IN-MadhurNeural`, `en-IN-PrabhatNeural`, ... (`edge-tts --list-voices`) |
-| `host_style` | The personality Gemini writes in |
-| `footage_mode` | `top_cc_videos` (most-viewed CC videos, mixed) or `stock` (search footage per place) |
-| `source_videos` | How many top CC videos to mix (default 2) |
-| `fill_with_stock` | Use Pexels/Pixabay for places with too few shots |
-| `places_per_video`, `clips_per_place`, `cut_seconds` | Length and pace |
+| `language`, `host_style` | Narration language and the host's personality |
+| `tts_engine` | `gemini` (natural) or `edge` |
+| `gemini_voice`, `voice_style` | Gemini voice (Puck, Charon, Fenrir, Kore, Aoede, Leda ...) and how it should sound |
+| `voice`, `voice_rate` | Backup Edge voice: `te-IN-MohanNeural` or `te-IN-ShrutiNeural` |
+| `places_per_video`, `clips_per_place` | Video length and variety |
+| `cut_seconds`, `camera_move_share` | Average shot length; share of shots with slow camera drift (0-1) |
 | `color_grade` | ffmpeg colour filter applied to every shot |
-| `music_file`, `music_volume` | Background music: put a royalty-free track at `assets/music.mp3` |
-| `upload.enabled`, `upload.privacy`, `upload.category_id` | Auto-upload; `19` = Travel & Events |
+| `use_wikimedia` | Use Wikimedia Commons footage |
+| `upload.enabled`, `upload.privacy` | Auto-upload on/off; `private` / `unlisted` / `public` |
+
+Add or reorder destinations in `destinations.json`. To change one week's script, edit
+`output/<week>_<city>/plan.json` locally and run again (`python main.py --city <place>`).

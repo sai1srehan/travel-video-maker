@@ -1,23 +1,30 @@
 {
   "language": "Telugu",
+  "host_style": "a friendly, funny Telugu travel YouTuber from Hyderabad who talks like a close friend, gives honest budget tips and how-to-reach details, and gets genuinely excited about views and food",
+
+  "tts_engine": "gemini",
+  "tts_model": "gemini-2.5-flash-preview-tts",
+  "gemini_voice": "Puck",
+  "voice_style": "Say this in natural spoken Telugu like a cheerful, energetic travel vlogger talking to friends, with natural pauses and excitement",
   "voice": "te-IN-MohanNeural",
   "voice_rate": "+5%",
-  "orientation": "landscape",
 
-  "footage_mode": "top_cc_videos",
+  "footage_mode": "stock",
+  "use_wikimedia": true,
+  "use_youtube_cc": false,
   "source_videos": 2,
   "fill_with_stock": true,
-
-  "places_per_video": 5,
-  "clips_per_place": 4,
-  "cut_seconds": 3.0,
-  "use_youtube_cc": true,
   "youtube_days": 7,
-  "music_file": "assets/music.mp3",
-  "music_volume": 0.12,
+
+  "orientation": "landscape",
+  "places_per_video": 5,
+  "clips_per_place": 5,
+  "cut_seconds": 3.0,
+  "camera_move_share": 0.35,
   "color_grade": "eq=contrast=1.06:saturation=1.18:brightness=0.01",
   "font_file": "C:/Windows/Fonts/arialbd.ttf",
-  "host_style": "a warm, energetic Telugu travel vlogger who mixes practical tips (best time to visit, entry fees, how to reach) with fun facts and history",
+  "music_file": "assets/music.mp3",
+  "music_volume": 0.12,
 
   "upload": {
     "enabled": true,

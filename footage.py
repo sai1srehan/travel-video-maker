@@ -18,7 +18,7 @@ import requests
 
 from media import FFMPEG, duration
 
-UA = {"User-Agent": "travel-video-maker/1.0"}
+UA = {"User-Agent": "travel-video-maker/1.0 (automated weekly travel video tool; python-requests)"}
 
 
 @dataclass
@@ -94,6 +94,48 @@ def search_pixabay(query, n, target_w):
         f = _pick_file(files, target_w)
         if f:
             out.append(("pixabay", f["link"], f"{h['user']} (Pixabay)", h["pageURL"]))
+    return out
+
+
+def _commercial_ok(lic: str) -> bool:
+    """Licences that allow commercial reuse without share-alike: CC0, public domain, CC BY."""
+    lic = lic.strip().lower()
+    if lic in ("cc0", "pdm", "public domain") or lic.startswith(("cc0", "public domain", "pd")):
+        return True
+    return lic.startswith("cc by") and not any(x in lic for x in ("-sa", "-nc", "-nd", " sa", " nc", " nd"))
+
+
+def search_wikimedia(query, n, target_w):
+    """Free-licence travel videos from Wikimedia Commons (official API, works from GitHub servers)."""
+    r = requests.get("https://commons.wikimedia.org/w/api.php", headers=UA, timeout=30, params={
+        "action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
+        "gsrsearch": f"filetype:video {query}", "gsrlimit": 12,
+        "prop": "videoinfo", "viprop": "url|size|mime|extmetadata|derivatives"})
+    r.raise_for_status()
+    min_h = 720 if target_w >= 1920 else 640
+    out = []
+    for page in (r.json().get("query", {}).get("pages") or {}).values():
+        info = (page.get("videoinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+        lic = meta.get("LicenseShortName", {}).get("value", "")
+        if not _commercial_ok(lic) or (info.get("height") or 0) < min_h:
+            continue
+        # prefer a VP9/MP4 transcode close to the size we need, else the original file
+        derivs = sorted((d for d in info.get("derivatives", []) if (d.get("height") or 0) >= min_h
+                         and d.get("type", "").startswith("video/")), key=lambda d: d.get("height") or 0)
+        link = derivs[0]["src"] if derivs else info.get("url")
+        if not link or (not derivs and (info.get("size") or 0) > 400 * 1024 * 1024):
+            continue  # no link, or a huge original with no smaller copy
+        artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "")).strip() or "Unknown"
+        title = page["title"].removeprefix("File:").rsplit(".", 1)[0]
+        about = (title + " " + re.sub(r"<[^>]+>", " ", meta.get("ImageDescription", {}).get("value", ""))).lower()
+        words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+        if not all(w in about for w in words) or "google" in artist.lower():
+            continue  # off-topic search hit, or Google Earth imagery (own terms of use)
+        pageurl = info.get("descriptionurl", "")
+        out.append(("wikimedia", link, f"{artist} (Wikimedia Commons) - \"{title}\", {lic}, {pageurl}", pageurl))
+        if len(out) >= n:
+            break
     return out
 
 
@@ -205,7 +247,7 @@ def _download_youtube(url: str, dest_dir: Path) -> Path | None:
         "outtmpl": str(dest_dir / "yt_%(id)s.%(ext)s"),
         "quiet": True, "no_warnings": True, "noplaylist": True,
         "ffmpeg_location": FFMPEG,
-        "match_filter": yt_dlp.utils.match_filter_func("duration < 1500"),
+        "match_filter": yt_dlp.utils.match_filter_func("duration < 1800"),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -230,6 +272,7 @@ def gather(terms, settings, dest_dir: Path, seen: set, log=print) -> list[Clip]:
         candidates = []
         for fn in (lambda: search_pexels(term, 4, settings["orientation"], target_w),
                    lambda: search_pixabay(term, 4, target_w),
+                   lambda: search_wikimedia(term, 3, target_w) if settings.get("use_wikimedia", True) else [],
                    lambda: search_youtube_cc(term, 2, settings["youtube_days"])
                    if settings.get("use_youtube_cc") else []):
             try:
@@ -250,7 +293,7 @@ def gather(terms, settings, dest_dir: Path, seen: set, log=print) -> list[Clip]:
             if not path:
                 continue
             d = duration(path)
-            if d < 2:
+            if d < 2:  # broken or unreadable file
                 continue
             seen.add(page)
             clips.append(Clip(path, d, source, credit, page))

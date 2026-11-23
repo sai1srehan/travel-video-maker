@@ -73,8 +73,11 @@ class _VideoSpot(_Spot):
 
 
 class _Script(BaseModel):
-    title: str = Field(description="Catchy YouTube title, under 70 characters")
-    intro_narration: str = Field(description="Hook for the first ~8 seconds, 15-25 words")
+    title: str = Field(description="YouTube title in the style of popular Telugu travel channels: "
+                                   "place name + a curiosity hook or budget/tip angle, under 70 characters, "
+                                   "no clickbait lies")
+    intro_narration: str = Field(description="Hook for the first ~8 seconds, 15-25 words: start mid-thought "
+                                             "with something surprising about the place, not 'welcome to my channel'")
     spots: list[_Spot]
     outro_narration: str = Field(description="Sign-off asking viewers to like/subscribe, 15-25 words")
     description: str = Field(description="YouTube description, 2-3 short paragraphs")
@@ -85,13 +88,22 @@ class _VideoScript(_Script):
     spots: list[_VideoSpot]
 
 
-SYSTEM = """You write voiceover scripts for a weekly travel video channel.
-Each episode covers one destination and its must-see places. The narration is read
-by a text-to-speech voice over the footage, so:
-- write for the ear: short sentences, no lists, no emojis, no stage directions;
-- talk about what the viewer is seeing at that place;
+SYSTEM = """You write voiceover scripts for a weekly travel YouTube channel, in the voice of its host.
+Each episode covers one destination and its must-see places. The narration is spoken over the footage.
+
+Sound like a real travel YouTuber talking to friends, not like a documentary or an AI:
+- casual spoken language as people really talk; for Telugu, natural everyday Telugu with the English
+  words Telugu people actually use (bus, ticket, budget, view, timing, entry fee, best time ...),
+  writing those English words in Telugu script so the voice pronounces them naturally;
+- talk TO the viewer ("friends", "mana", "chudandi"), react to what's on screen, add small opinions,
+  a bit of humour, and practical tips (how to reach, rough budget, best time, what to skip);
+- vary sentence length; short punchy lines; no lists, no emojis, no stage directions;
+- NEVER use clichés like "hidden gem", "nestled", "tapestry", "paradise on earth", "a feast for the eyes",
+  "embark on a journey", "in this video we will", "without further ado";
+- never claim personal experiences that didn't happen (no "I ate here yesterday", "when I landed");
+  present it as a guide: "ikkada vachhinappudu ...", "meeru vellinappudu ...";
 - every fact (timings, fees, history) must be well known and stable; if unsure, leave it out;
-- the narration is entirely your own words: never copy or translate the source videos' speech.
+- the narration is entirely your own words: never copy or translate anyone else's video.
 search_terms and spot names are always in English, even when the narration is not."""
 
 VIDEO_RULES = """You are given {n} source videos (Creative Commons, reuse allowed) about this destination.
