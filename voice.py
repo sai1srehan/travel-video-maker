@@ -10,7 +10,6 @@ Kore (firm, female), Aoede (breezy, female), Leda (youthful, female), Zephyr (br
 """
 import asyncio
 import os
-import time
 import wave
 from pathlib import Path
 
@@ -31,8 +30,8 @@ def _gemini(text, out: Path, settings):
     style = settings.get("voice_style", "Say this like a cheerful, friendly travel vlogger talking to friends")
     lang = LANG_CODES.get(settings.get("language", "").lower())
     import gemini_models
-    resp = client.models.generate_content(
-        model=gemini_models.resolve(client, settings.get("tts_model"), "tts"),
+    resp = gemini_models.generate(
+        client, settings.get("tts_model"), "tts", waits=(20, 60),
         contents=f"{style}:\n{text}",
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
@@ -60,13 +59,9 @@ def speak(text: str, out_base: Path, settings: dict, log=print) -> Path:
     """Writes out_base.wav (Gemini) or out_base.mp3 (Edge). Returns the file written."""
     global _gemini_broken
     if settings.get("tts_engine", "gemini") == "gemini" and not _gemini_broken:
-        err = None
-        for wait in (0, 15, 45):  # free tier: a few requests per minute
-            time.sleep(wait)
-            try:
-                return _gemini(text, out_base.with_suffix(".wav"), settings)
-            except Exception as e:  # rate limit / quota / model renamed
-                err = e
-        _gemini_broken = True
-        log(f"    ! Gemini voice failed ({err}) - using the Edge voice")
+        try:  # retries + fallback models happen inside gemini_models.generate
+            return _gemini(text, out_base.with_suffix(".wav"), settings)
+        except Exception as e:  # quota used up / no TTS model for this key
+            _gemini_broken = True
+            log(f"    ! Gemini voice failed ({str(e)[:150]}) - using the Edge voice")
     return _edge(text, out_base.with_suffix(".mp3"), settings["voice"], settings.get("voice_rate", "+0%"))
