@@ -85,21 +85,54 @@ def _retryable(e: Exception) -> bool:
                             "Timeout", "timed out", "ConnectError", "RemoteProtocolError"))
 
 
-def generate(client, preferred, kind, waits=(30, 60, 120, 240), log=print, **kwargs):
-    """client.models.generate_content with retries on overload/rate limits, then other models."""
-    last = None
-    models = candidates(client, preferred, kind)
-    for i, model in enumerate(models[:3]):  # the preferred model, then up to 2 fallbacks
-        if i:
-            log(f"  trying another Gemini model: {model}")
-        for attempt, wait in enumerate((0,) + tuple(waits if i == 0 else waits[:2])):
-            if wait:
-                log(f"  Gemini busy ({str(last)[:80]}) - retrying in {wait}s")
-                time.sleep(wait)
-            try:
-                return client.models.generate_content(model=model, **kwargs)
-            except Exception as e:
-                last = e
-                if not _retryable(e):
-                    break  # e.g. model not found / bad request: go to the next model
-    raise last
+def _out_of_quota(e: Exception) -> bool:
+    """429 because a daily/free-tier quota is used up: waiting minutes won't help, use another model."""
+    t = str(e)
+    return "RESOURCE_EXHAUSTED" in t and any(s in t for s in ("PerDay", "per day", "free_tier", "FreeTier"))
+
+
+def _short(e: Exception) -> str:
+    t = str(e)
+    m = re.search(r"'message': '([^']*)", t)
+    return (m.group(1) if m else t)[:160]
+
+
+def generate(client, preferred, kind, waits=(20, 45), log=print, budget_minutes=40, max_models=8, **kwargs):
+    """client.models.generate_content that survives Gemini being overloaded.
+
+    Goes through every usable model (preferred first, Lite and older versions after), a couple of
+    quick retries each; if they're all busy, waits a few minutes and goes round again, until
+    budget_minutes is used up. Models whose daily quota is spent are dropped for the rest of the run.
+    """
+    deadline = time.monotonic() + budget_minutes * 60
+    models = candidates(client, preferred, kind)[:max_models]
+    log(f"  Gemini models to try: {', '.join(models)}")
+    dead: set[str] = set()
+    last, rnd = None, 0
+    while True:
+        for model in models:
+            if model in dead:
+                continue
+            for wait in (0,) + tuple(waits):
+                if wait:
+                    if time.monotonic() + wait > deadline:
+                        break
+                    log(f"    {model} busy - retrying in {wait}s")
+                    time.sleep(wait)
+                try:
+                    out = client.models.generate_content(model=model, **kwargs)
+                    if rnd or model != models[0]:
+                        log(f"  OK with {model}")
+                    return out
+                except Exception as e:
+                    last = e
+                    log(f"    {model}: {type(e).__name__}: {_short(e)}")
+                    if _out_of_quota(e) or not _retryable(e):
+                        dead.add(model)  # quota gone / model not found / bad request
+                        break
+        rnd += 1
+        cool = min(300, 60 * 2 ** rnd)  # 2, 4, 5, 5 ... minutes between rounds
+        if len(dead) == len(models) or time.monotonic() + cool > deadline:
+            raise last
+        log(f"  all Gemini models busy - waiting {cool // 60} min, then trying again (round {rnd + 1})")
+        time.sleep(cool)

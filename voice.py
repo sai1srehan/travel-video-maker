@@ -38,7 +38,7 @@ def _gemini(text, out: Path, settings):
     lang = LANG_CODES.get(settings.get("language", "").lower())
     import gemini_models
     resp = gemini_models.generate(
-        client, settings.get("tts_model"), "tts", waits=(20, 60),
+        client, settings.get("tts_model"), "tts", waits=(20,), budget_minutes=4, max_models=3,
         contents=f"{style}:\n{text}",
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
