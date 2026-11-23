@@ -17,9 +17,14 @@
   "youtube_days": 7,
 
   "orientation": "landscape",
-  "places_per_video": 5,
-  "clips_per_place": 5,
-  "cut_seconds": 3.0,
+  "target_minutes": 20,
+  "words_per_second": 1.8,
+  "cut_seconds": 3.5,
+  "shorts": {
+    "enabled": true,
+    "seconds": 120,
+    "places": 4
+  },
   "camera_move_share": 0.35,
   "color_grade": "eq=contrast=1.06:saturation=1.18:brightness=0.01",
   "font_file": "C:/Windows/Fonts/arialbd.ttf",

@@ -52,7 +52,7 @@ def _fit_tags(tags, limit=480):
     return out
 
 
-def upload(video: Path, thumbnail: Path, title: str, description: str, tags: list[str],
+def upload(video: Path, thumbnail: Path | None, title: str, description: str, tags: list[str],
            settings: dict, log=print) -> str:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
@@ -75,7 +75,7 @@ def upload(video: Path, thumbnail: Path, title: str, description: str, tags: lis
     vid = response["id"]
     log(f"  uploaded: https://youtu.be/{vid} ({body['status']['privacyStatus']})")
 
-    if thumbnail.exists():
+    if thumbnail and Path(thumbnail).exists():
         try:
             yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg")).execute()
             log("  thumbnail set")

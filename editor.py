@@ -40,36 +40,60 @@ def prepare_font(work: Path, settings):
     raise FileNotFoundError("No font found - set font_file in settings.json")
 
 
-def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random):
+def _trimmed(c):
+    w0, w1 = c.window
+    if c.end is None:  # whole stock clip: skip its first/last 8%
+        span = w1 - w0
+        w0, w1 = w0 + span * 0.08, w1 - span * 0.08
+    return w0, w1
+
+
+def _free_start(c, L, used, rng):
+    """A start time in clip c whose [start, start+L] hasn't been used yet, or None."""
+    key = str(c.path)
+    taken = used.setdefault(key, [])
+    w0, w1 = _trimmed(c)
+    if w1 - w0 < L + 0.3:  # short clip: usable once, from its beginning
+        return None if taken else (c.start if c.end is not None else 0.0)
+    slots = list(range(int((w1 - w0) // L)))
+    rng.shuffle(slots)
+    for j in slots:
+        s = w0 + j * L
+        if all(s + L <= a or s >= b for a, b in taken):
+            return s
+    return None
+
+
+def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random, used: dict | None = None):
     """Render enough graded shots to cover `total` seconds.
 
     Like a hand-edited vlog: shot lengths vary (0.7x-1.6x cut_seconds), most shots are straight cuts,
-    and only some get a slow push/pan, alternating direction.
+    and only some get a slow drift. `used` tracks which parts of each clip were already shown
+    (shared across the whole video), so the same footage isn't repeated until everything is used.
     """
     W, H = _size(settings)
     base = settings["cut_seconds"]
+    used = {} if used is None else used
     lengths, acc = [], 0.0
     while acc < total:
         L = round(rng.uniform(base * 0.7, base * 1.6), 2)
         lengths.append(L)
         acc += L
-    uses = {}
     cuts = []
+    n = len(clips)
     for i, L in enumerate(lengths):
-        c = clips[i % len(clips)]
-        key = (c.path, c.start, c.end)
-        k = uses.get(key, 0)
-        uses[key] = k + 1
-        w0, w1 = c.window
-        if c.end is None:  # whole stock clip: skip its first/last 8%
-            span = w1 - w0
-            w0, w1 = w0 + span * 0.08, w1 - span * 0.08
-        lo, hi = w0, max(w1 - L, w0)
-        frac = (0.2 + k * 0.37 + rng.uniform(-0.05, 0.05)) % 1.0
-        if w1 - w0 > L + 0.5:
-            start = lo + frac * (hi - lo)
-        else:  # short window: start at its beginning (whole short stock clip: from 0)
-            start = c.start if c.end is not None else 0
+        pick = None
+        for c in clips[i % n:] + clips[:i % n]:  # round-robin, first clip with unused footage
+            s = _free_start(c, L, used, rng)
+            if s is not None:
+                pick = (c, s)
+                break
+        if pick is None:  # everything already shown once: reuse a random part
+            c = clips[i % n]
+            w0, w1 = _trimmed(c)
+            pick = (c, w0 + rng.random() * max(0.0, w1 - w0 - L))
+        c, start = pick
+        used.setdefault(str(c.path), []).append((start, start + L))
         move = rng.random() < settings.get("camera_move_share", 0.35)
         if move:  # gentle drift, 4% overscan
             x = f"(iw-ow)*t/{L}" if rng.random() < 0.5 else f"(iw-ow)*(1-t/{L})"
@@ -79,7 +103,7 @@ def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random):
             frame = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
         vf = (f"{frame},setsar=1,fps={FPS},{settings['color_grade']},"
               f"tpad=stop_mode=clone:stop_duration={L},format=yuv420p")  # hold last frame if clip is short
-        out = work / f"cut_{tag}_{i:02d}.mp4"
+        out = work / f"cut_{tag}_{i:03d}.mp4"
         ffmpeg(["-ss", f"{start:.2f}", "-i", c.path, "-t", L, "-vf", vf, "-an",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", out])
         cuts.append(out)
@@ -95,12 +119,12 @@ def _wrap(text, W, H, size):
     return textwrap.fill(text, max_chars, break_long_words=False)
 
 
-def _lower_third(textfile, H, start=0.4, end=4.5):
+def _lower_third(textfile, H, start=0.4, end=4.5, bottom=0.1):
     a = (f"if(lt(t,{start}),0,if(lt(t,{start + 0.5}),(t-{start})/0.5,"
          f"if(lt(t,{end - 0.5}),1,if(lt(t,{end}),({end}-t)/0.5,0))))")
     return (f"drawtext=fontfile=font.ttf:textfile={textfile}:expansion=none:"
             f"fontsize={int(H * LOWER_THIRD_SIZE)}:fontcolor=white:box=1:boxcolor=black@0.4:boxborderw=24:"
-            f"line_spacing=10:x=w*0.05:y=h-th-h*0.1:alpha='{a}'")
+            f"line_spacing=10:x=w*0.05:y=h-th-h*{bottom}:alpha='{a}'")
 
 
 def _centered(textfile, H, size=0.08, y="(h-th)/2", start=0.3, end=None):
@@ -141,44 +165,49 @@ def _pick_music(settings, rng):
 def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir: Path, log=print):
     """spot_clips: list[list[Clip]] aligned with plan.spots; voices: dict tag -> mp3 path."""
     W, H = _size(settings)
+    work.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     prepare_font(work, settings)
-    rng = random.Random(plan.city)
+    rng = random.Random(plan.city + out_dir.name)
+    used = {}  # footage already shown, shared by all sections
     segments = []
+    thumb_src = work / "thumb_src.jpg"
+
+    def section(clips, voice, overlays, tag):
+        cuts = make_cuts(clips, duration(voice) + PAD, settings, work, tag, rng, used)
+        if not thumb_src.exists() and tag.startswith("s"):  # first place's first shot -> thumbnail
+            ffmpeg(["-ss", "1", "-i", cuts[0], "-frames:v", "1", "-q:v", "2", thumb_src])
+        segments.append(make_segment(cuts, voice, overlays, work, tag, settings))
+        for c in cuts:  # free disk space as we go (long videos have hundreds of shots)
+            c.unlink(missing_ok=True)
 
     # Intro: one shot from each place under the title
     intro_pool = [cl[0] for cl in spot_clips if cl] or [c for cl in spot_clips for c in cl]
-    total = duration(voices["intro"]) + PAD
-    cuts = make_cuts(intro_pool, total, settings, work, "intro", rng)
-    t1 = _write_text(work, "t_title.txt", plan.city.upper())
-    t2 = _write_text(work, "t_sub.txt", plan.country)
-    segments.append(make_segment(cuts, voices["intro"], [
-        _centered(t1, H, 0.12, "(h-th)/2-h*0.05"), _centered(t2, H, 0.05, "(h/2)+h*0.06", 0.8)],
-        work, "intro", settings))
+    title = [_centered(_write_text(work, "t_title.txt", plan.city.upper()), H, 0.12, "(h-th)/2-h*0.05")]
+    if plan.country and plan.country.lower() != plan.city.lower():
+        title.append(_centered(_write_text(work, "t_sub.txt", plan.country), H, 0.05, "(h/2)+h*0.06", 0.8))
+    section(intro_pool, voices["intro"], title, "intro")
     log("  intro done")
 
     for i, (spot, clips) in enumerate(zip(plan.spots, spot_clips)):
-        if not clips:
+        tag = f"s{i}"
+        if not clips or tag not in voices:
             log(f"  ! no footage for {spot.name}, skipped")
             continue
-        tag = f"s{i}"
-        total = duration(voices[tag]) + PAD
-        cuts = make_cuts(clips, total, settings, work, tag, rng)
         short = min(W, H)  # size by the short side so portrait titles aren't oversized
         tf = _write_text(work, f"t_{tag}.txt", _wrap(f"{i + 1}. {spot.name}", W, short, LOWER_THIRD_SIZE))
-        segments.append(make_segment(cuts, voices[tag], [_lower_third(tf, short)], work, tag, settings))
-        log(f"  {spot.name} done")
+        bottom = 0.3 if H > W else 0.1  # Shorts: keep clear of YouTube's caption/channel overlay
+        section(clips, voices[tag], [_lower_third(tf, short, bottom=bottom)], tag)
+        log(f"  {spot.name} done ({i + 1}/{len(plan.spots)})")
 
     # Outro with credits
     all_clips = [c for cl in spot_clips for c in cl]
-    total = duration(voices["outro"]) + PAD
-    cuts = make_cuts(all_clips[-3:] or all_clips, total, settings, work, "outro", rng)
     names = sorted({c.credit.split(" - ")[0] if c.source in ("youtube", "wikimedia") else c.credit
                     for c in credits})
     shown = names[:6] + ([f"+ {len(names) - 6} more"] if len(names) > 6 else [])
     tc = _write_text(work, "t_credits.txt", "Footage\n" + "\n".join(shown) + "\n\nFull credits in description")
-    segments.append(make_segment(cuts, voices["outro"], [
-        "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill",
-        _centered(tc, H, 0.032, "(h-th)/2", 0.2)], work, "outro", settings))
+    section(all_clips, voices["outro"], ["drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill",
+                                         _centered(tc, H, 0.032, "(h-th)/2", 0.2)], "outro")
     log("  outro done")
 
     # Join sections
@@ -186,6 +215,8 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
     lst.write_text("".join(f"file '{s.name}'\n" for s in segments), encoding="utf-8")
     joined = work / "joined.mp4"
     ffmpeg(["-f", "concat", "-safe", "0", "-i", lst.name, "-c", "copy", joined.name], cwd=work)
+    for s in segments:
+        s.unlink(missing_ok=True)
 
     final = out_dir / "video.mp4"
     music = _pick_music(settings, rng)
@@ -201,12 +232,13 @@ def build_video(plan, spot_clips, voices, credits, settings, work: Path, out_dir
     else:
         log("  (no music found - add royalty-free tracks to assets/music/ for background music)")
         shutil.copy(joined, final)
+    joined.unlink(missing_ok=True)
 
     # Thumbnail
-    tt = _write_text(work, "t_thumb.txt", plan.city.upper())
-    shot = next((p for p in sorted(work.glob("cut_s*_00.mp4"))), work / "cut_intro_00.mp4")
-    ffmpeg(["-ss", "1.5", "-i", shot, "-frames:v", "1",
-            "-vf", f"drawtext=fontfile=font.ttf:textfile={tt}:expansion=none:fontsize={int(H * 0.16)}:"
-                   f"fontcolor=yellow:borderw=8:bordercolor=black:x=(w-tw)/2:y=h-th-h*0.12",
-            "-q:v", "2", (out_dir / "thumbnail.jpg").resolve()], cwd=work)
+    if thumb_src.exists():
+        tt = _write_text(work, "t_thumb.txt", _wrap(plan.city.upper(), W, min(W, H), 0.16))
+        ffmpeg(["-i", thumb_src.name, "-frames:v", "1",
+                "-vf", f"drawtext=fontfile=font.ttf:textfile={tt}:expansion=none:fontsize={int(min(W, H) * 0.16)}:"
+                       f"fontcolor=yellow:borderw=8:bordercolor=black:x=(w-tw)/2:y=h-th-h*0.12",
+                "-q:v", "2", (out_dir / "thumbnail.jpg").resolve()], cwd=work)
     return final

@@ -6,23 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       city:
-        description: "City (leave empty for next one in destinations.json)"
+        description: "Place (leave empty for the next one in destinations.json)"
         required: false
       country:
-        description: "Country"
+        description: "Country (optional)"
         required: false
-      portrait:
-        description: "Vertical 1080x1920 (Shorts/Reels)"
-        type: boolean
-        default: false
+      minutes:
+        description: "Long video length in minutes (empty = settings.json)"
+        required: false
 
 permissions:
-  contents: write   # to commit output/history.json so next week picks a new city
+  contents: write   # to commit output/history.json so next week picks a new place
 
 jobs:
   make-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240   # a 20-30 min video takes roughly 1-2 hours to render
     steps:
       - uses: actions/checkout@v4
 
@@ -31,13 +30,9 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - uses: denoland/setup-deno@v2   # yt-dlp needs a JavaScript runtime for YouTube
-        with:
-          deno-version: v2.x
-
       - run: pip install -r requirements.txt
 
-      - name: Make video
+      - name: Make and upload the videos
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
@@ -47,24 +42,45 @@ jobs:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
           CITY: ${{ inputs.city }}
           COUNTRY: ${{ inputs.country }}
-          PORTRAIT: ${{ inputs.portrait }}
+          MINUTES: ${{ inputs.minutes }}
         run: |
           args=()
           [ -n "$CITY" ] && args+=(--city "$CITY" --country "$COUNTRY")
-          [ "$PORTRAIT" = "true" ] && args+=(--portrait)
+          [ -n "$MINUTES" ] && args+=(--minutes "$MINUTES")
           python main.py "${args[@]}"
 
-      - name: Upload video
+      - name: Save script, thumbnail and links
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: travel-video-${{ github.run_number }}
+          name: travel-video-${{ github.run_number }}-info
           path: |
-            output/*/video.mp4
             output/*/thumbnail.jpg
             output/*/upload.txt
             output/*/plan.json
             output/*/youtube_url.txt
+            output/*/short/upload.txt
+            output/*/short/youtube_url.txt
           retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Check whether the videos reached YouTube
+        id: yt
+        if: always()
+        run: |
+          if ls output/*/youtube_url.txt >/dev/null 2>&1; then echo "uploaded=true" >> "$GITHUB_OUTPUT"; fi
+
+      # Video files are big, so they're only kept when the YouTube upload didn't happen
+      - name: Save video files (only if not uploaded)
+        if: always() && steps.yt.outputs.uploaded != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: travel-video-${{ github.run_number }}-files
+          path: |
+            output/*/video.mp4
+            output/*/short/video.mp4
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Save history
         run: |
@@ -72,4 +88,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add output/history.json
           git commit -m "Weekly video: update history" || echo "nothing to commit"
+          git pull --rebase
           git push

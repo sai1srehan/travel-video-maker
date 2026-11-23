@@ -270,8 +270,9 @@ def gather(terms, settings, dest_dir: Path, seen: set, log=print) -> list[Clip]:
         if len(clips) >= want:
             break
         candidates = []
-        for fn in (lambda: search_pexels(term, 4, settings["orientation"], target_w),
-                   lambda: search_pixabay(term, 4, target_w),
+        per = max(4, min(10, want - len(clips)))  # results per source for this search term
+        for fn in (lambda: search_pexels(term, per, settings["orientation"], target_w),
+                   lambda: search_pixabay(term, per, target_w),
                    lambda: search_wikimedia(term, 3, target_w) if settings.get("use_wikimedia", True) else [],
                    lambda: search_youtube_cc(term, 2, settings["youtube_days"])
                    if settings.get("use_youtube_cc") else []):

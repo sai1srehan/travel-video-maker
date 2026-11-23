@@ -1,7 +1,8 @@
 # Weekly Telugu Travel Video Maker
 
 Runs on GitHub every Sunday, no PC needed. It's completely free (all services used have free tiers).
-For each week's destination it:
+Every week it uploads a **~20-minute video** (set 12-30 in `settings.json`) plus a **2-minute vertical Short**
+that teases it and links to it. For each week's destination it:
 
 1. **Script:** Gemini picks the best places and writes a Telugu voiceover that sounds like a
    real Telugu travel YouTuber: casual Telugu with everyday English words, tips, budget, humour, no AI clichés.
@@ -21,9 +22,9 @@ Each run's files are also saved as a GitHub artifact: `video.mp4`, `thumbnail.jp
 | Secret | Get it |
 |---|---|
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
-| `PEXELS_API_KEY` | https://www.pexels.com/api/ |
 | `PIXABAY_API_KEY` | https://pixabay.com/api/docs/ |
 | `YOUTUBE_TOKEN_JSON` | step 2 |
+| `PEXELS_API_KEY` (optional) | https://www.pexels.com/api/ (new keys are paused right now; add it later if they reopen) |
 
 Wikimedia Commons needs no key.
 
@@ -45,6 +46,7 @@ Never commit `client_secret.json` or `token.json` (they're in `.gitignore`).
 2. **Settings → Secrets and variables → Actions**: add the secrets above.
 3. **Settings → Actions → General → Workflow permissions → Read and write**.
 4. **Actions → Weekly travel video → Run workflow** to test. Type a place (e.g. `Malaysia`) or leave it empty.
+   Tip: for the first test, type `5` in **minutes** so it finishes quickly. A 20-minute video takes about 1-2 hours on GitHub.
 
 ### 4. Music (recommended)
 
@@ -71,7 +73,9 @@ pick ones marked "no attribution required") and upload them to `assets/music/` i
 | `tts_engine` | `gemini` (natural) or `edge` |
 | `gemini_voice`, `voice_style` | Gemini voice (Puck, Charon, Fenrir, Kore, Aoede, Leda ...) and how it should sound |
 | `voice`, `voice_rate` | Backup Edge voice: `te-IN-MohanNeural` or `te-IN-ShrutiNeural` |
-| `places_per_video`, `clips_per_place` | Video length and variety |
+| `target_minutes` | Long video length (12-30). Number of places, narration and footage scale with it |
+| `words_per_second` | Speaking speed used to size the script; raise it if videos come out longer than wanted |
+| `shorts.enabled`, `shorts.seconds`, `shorts.places` | The weekly vertical Short (max 180 s) |
 | `cut_seconds`, `camera_move_share` | Average shot length; share of shots with slow camera drift (0-1) |
 | `color_grade` | ffmpeg colour filter applied to every shot |
 | `use_wikimedia` | Use Wikimedia Commons footage |

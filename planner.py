@@ -38,6 +38,11 @@ class Spot(BaseModel):
     segments: list[Segment] = []
 
 
+class ShortBeat(BaseModel):
+    spot: int  # 1-based index into VideoPlan.spots
+    narration: str
+
+
 class VideoPlan(BaseModel):
     city: str
     country: str
@@ -47,7 +52,26 @@ class VideoPlan(BaseModel):
     outro_narration: str
     description: str
     tags: list[str]
+    broll_terms: list[str] = []
+    short_title: str = ""
+    short_hook: str = ""
+    short_beats: list[ShortBeat] = []
+    short_outro: str = ""
     sources: list[SourceVideo] = []
+
+
+def layout(settings: dict) -> dict:
+    """Turn target_minutes into: number of places, seconds/words of narration per place, clips needed."""
+    mins = float(settings.get("target_minutes", 20))
+    wps = float(settings.get("words_per_second", 1.8))  # spoken Telugu, roughly
+    places = int(settings.get("places_per_video") or 0) or max(5, min(18, round(mins * 0.65)))
+    place_secs = max(20.0, (mins * 60 - 45) / places)  # 45 s for intro + outro
+    sh = settings.get("shorts", {})
+    short_secs, short_places = float(sh.get("seconds", 120)), int(sh.get("places", 4))
+    beat_secs = max(8.0, (short_secs * 0.92 - 10) / short_places)  # hook + outro ~10 s, 8% safety margin
+    return {"minutes": mins, "places": places, "place_secs": place_secs, "place_words": int(place_secs * wps),
+            "clips_per_place": max(4, min(16, round(place_secs / 9))),
+            "short_secs": short_secs, "short_places": short_places, "beat_words": int(beat_secs * wps)}
 
 
 # ---- what Gemini returns (no default values: the Gemini schema doesn't support them) ---
@@ -61,9 +85,15 @@ class _Segment(BaseModel):
 class _Spot(BaseModel):
     name: str = Field(description="Place name in English, short enough for an on-screen title")
     search_terms: list[str] = Field(
-        description="2-3 short English phrases for searching stock footage of this exact place, "
-                    "most specific first, e.g. ['Petronas Towers Kuala Lumpur', 'Petronas Towers night']")
-    narration: str = Field(description="Voiceover for this place, 35-55 words, in the requested language")
+        description="3-8 short English phrases for searching stock footage of this place, most specific first, "
+                    "covering different views and things nearby so there is varied footage, e.g. "
+                    "['Petronas Towers Kuala Lumpur', 'Petronas Towers night', 'KLCC park fountain', 'Kuala Lumpur skyline']")
+    narration: str = Field(description="Voiceover for this place in the requested language, as long as the prompt asks")
+
+
+class _ShortBeat(BaseModel):
+    spot: int = Field(description="Which place this beat shows: 1 for the first place in spots, 2 for the second, ...")
+    narration: str = Field(description="Voiceover for this beat in the requested language, as long as the prompt asks")
 
 
 class _VideoSpot(_Spot):
@@ -82,6 +112,14 @@ class _Script(BaseModel):
     outro_narration: str = Field(description="Sign-off asking viewers to like/subscribe, 15-25 words")
     description: str = Field(description="YouTube description, 2-3 short paragraphs")
     tags: list[str] = Field(description="10-15 YouTube tags")
+    broll_terms: list[str] = Field(
+        description="8-12 short English search phrases for general footage of the destination, no single landmark: "
+                    "streets, local food, markets, transport, skyline, sunset, nature, people, e.g. "
+                    "['Kuala Lumpur street food', 'Kuala Lumpur traffic night', 'Malaysia rainforest']")
+    short_title: str = Field(description="YouTube Shorts title in the requested language, under 60 characters")
+    short_hook: str = Field(description="First 3 seconds of the Short, 6-12 words: a surprising fact or question")
+    short_beats: list[_ShortBeat] = Field(description="The Short's beats, one per place, best places only")
+    short_outro: str = Field(description="6-12 words: the full video about this destination is on the channel")
 
 
 class _VideoScript(_Script):
@@ -115,10 +153,23 @@ Watch them and build the episode ONLY from places that are clearly shown in them
 
 
 def _prompt(city, country, settings):
-    return (f"Destination this week: {city}, {country}.\n"
-            f"Narration language: {settings['language']}. The YouTube title and description should "
-            f"also be in {settings['language']}, with the place names in English.\n"
-            f"Host personality: {settings['host_style']}.")
+    lay = layout(settings)
+    where = f"{city}, {country}" if country and country.lower() != city.lower() else city
+    p = (f"Destination this week: {where}.\n"
+         f"Narration language: {settings['language']}. The YouTube title and description should "
+         f"also be in {settings['language']}, with the place names in English.\n"
+         f"Host personality: {settings['host_style']}.\n\n"
+         f"LONG VIDEO, about {lay['minutes']:.0f} minutes: pick the {lay['places']} best places, in a sensible "
+         f"route order (mix famous sights with food streets, markets, viewpoints and day trips). "
+         f"Each place's narration must be about {lay['place_words']} words (~{lay['place_secs']:.0f} seconds "
+         f"spoken): what we're seeing, a little history or a story, how to reach, timings and rough budget, "
+         f"food nearby, an honest opinion or tip. Keep it flowing and varied, never padded or repetitive. "
+         f"Intro and outro: 15-25 words each.\n")
+    if settings.get("shorts", {}).get("enabled"):
+        p += (f"\nSHORT, {lay['short_secs']:.0f}-second vertical YouTube Short teasing the long video: "
+              f"a hook, then {lay['short_places']} beats for the {lay['short_places']} most stunning places "
+              f"(about {lay['beat_words']} words each, fast and exciting), then the outro.\n")
+    return p
 
 
 def _ask(contents, schema, system):
@@ -136,10 +187,19 @@ def _ask(contents, schema, system):
 
 
 def make_plan(city: str, country: str, settings: dict) -> VideoPlan:
-    prompt = (_prompt(city, country, settings) +
-              f"\nPick the {settings['places_per_video']} best places to visit there, in a sensible route order.")
-    script = _ask(prompt, _Script, SYSTEM)
-    return VideoPlan(city=city, country=country, **script.model_dump())
+    script = _ask(_prompt(city, country, settings), _Script, SYSTEM)
+    return _fix_short(VideoPlan(city=city, country=country, **script.model_dump()))
+
+
+def _fix_short(plan: VideoPlan) -> VideoPlan:
+    """Drop Short beats that point at a place that doesn't exist, and repeats."""
+    seen, beats = set(), []
+    for b in plan.short_beats:
+        if 1 <= b.spot <= len(plan.spots) and b.spot not in seen:
+            seen.add(b.spot)
+            beats.append(b)
+    plan.short_beats = beats
+    return plan
 
 
 def make_plan_from_videos(city: str, country: str, sources: list[SourceVideo], settings: dict) -> VideoPlan:
@@ -148,7 +208,7 @@ def make_plan_from_videos(city: str, country: str, sources: list[SourceVideo], s
         parts.append(types.Part(text=f"Source video {i}: \"{s.title}\" by {s.channel}"))
         parts.append(types.Part(file_data=types.FileData(file_uri=s.url, mime_type="video/*")))
     parts.append(types.Part(text=_prompt(city, country, settings)))
-    system = SYSTEM + "\n\n" + VIDEO_RULES.format(n=len(sources), k=settings["places_per_video"])
+    system = SYSTEM + "\n\n" + VIDEO_RULES.format(n=len(sources), k=layout(settings)["places"])
     script = _ask(parts, _VideoScript, system)
 
     plan = VideoPlan(city=city, country=country, sources=sources, **script.model_dump())
@@ -162,4 +222,4 @@ def make_plan_from_videos(city: str, country: str, sources: list[SourceVideo], s
             if end - start >= 1.5:
                 good.append(Segment(video=seg.video, start=start, end=end))
         spot.segments = good
-    return plan
+    return _fix_short(plan)

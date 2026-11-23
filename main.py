@@ -4,8 +4,9 @@
   python main.py --city Malaysia       # any city or country
   python main.py --city Hampi --country India
   python main.py --plan-only           # just write the script, no video
-  python main.py --portrait            # 1080x1920 for Shorts / Reels
-  python main.py --no-upload           # make the video but don't upload it
+  python main.py --minutes 30          # long video length (default: target_minutes in settings.json)
+  python main.py --no-short            # skip the weekly Short
+  python main.py --no-upload           # make the videos but don't upload them
 """
 import argparse
 import json
@@ -24,7 +25,8 @@ import requests  # noqa: E402
 
 import footage  # noqa: E402
 from editor import build_video  # noqa: E402
-from planner import SourceVideo, VideoPlan, make_plan, make_plan_from_videos  # noqa: E402
+from media import duration  # noqa: E402
+from planner import SourceVideo, Spot, VideoPlan, layout, make_plan, make_plan_from_videos  # noqa: E402
 from voice import speak  # noqa: E402
 
 HISTORY = ROOT / "output" / "history.json"
@@ -46,11 +48,13 @@ def pick_destination():
     return dests[(week.year * 53 + week.week) % len(dests)]  # all used: start cycling
 
 
-def record(city, folder, url=None):
+def record(city, folder, url=None, short_url=None):
     history = json.loads(HISTORY.read_text(encoding="utf-8")) if HISTORY.exists() else []
     entry = {"city": city, "date": date.today().isoformat(), "folder": folder.name}
     if url:
         entry["youtube"] = url
+    if short_url:
+        entry["short"] = short_url
     history.append(entry)
     HISTORY.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
@@ -105,9 +109,15 @@ def main():
     ap.add_argument("--plan-only", action="store_true")
     ap.add_argument("--portrait", action="store_true")
     ap.add_argument("--no-upload", action="store_true")
+    ap.add_argument("--minutes", type=float, help="long video length (overrides settings.json)")
+    ap.add_argument("--no-short", action="store_true")
     args = ap.parse_args()
 
     settings = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
+    if args.minutes:
+        settings["target_minutes"] = args.minutes
+    if args.no_short:
+        settings.setdefault("shorts", {})["enabled"] = False
     if args.portrait:
         settings["orientation"] = "portrait"
     if not os.getenv("GEMINI_API_KEY"):
@@ -137,65 +147,121 @@ def main():
         return
 
     # 2. Footage
-    log("2/5 footage")
+    lay = layout(settings)
+    settings["clips_per_place"] = lay["clips_per_place"]
+    log(f"2/5 footage (~{lay['clips_per_place']} clips per place)")
     downloaded = footage.download_sources(plan.sources, work / "sources", log) if plan.sources else {}
-    stock_ok = any(map(os.getenv, ("PEXELS_API_KEY", "PIXABAY_API_KEY", "YOUTUBE_API_KEY")))
+    stock_ok = True  # Wikimedia Commons needs no key; Pixabay/Pexels are used when their keys are set
+    if not any(map(os.getenv, ("PEXELS_API_KEY", "PIXABAY_API_KEY"))):
+        log("  ! no PIXABAY_API_KEY / PEXELS_API_KEY - using Wikimedia Commons only (less footage)")
     seen, spot_clips = {s.url for s in plan.sources}, []
-    for s in plan.spots:
+    broll = []
+    if stock_ok:
+        log("  general footage of the destination (streets, food, transport ...)")
+        broll = footage.gather(plan.broll_terms or [f"{plan.city} {plan.country}".strip()],
+                               {**settings, "clips_per_place": lay["clips_per_place"] * 2},
+                               work / "clips", seen, log)
+    for i, s in enumerate(plan.spots):
         log(f"  {s.name}")
         clips = footage.segment_clips(s, plan.sources, downloaded)
         if clips:
             log(f"    {len(clips)} shots from the source videos")
-        if len(clips) < 2 and stock_ok and settings.get("fill_with_stock", True):
+        if len(clips) < lay["clips_per_place"] and stock_ok and settings.get("fill_with_stock", True):
             clips += footage.gather(s.search_terms, settings, work / "clips", seen, log)
             if len(clips) < 2:  # broaden the search
-                clips += footage.gather([f"{s.name} {plan.city}", f"{plan.city} {plan.country}".strip()],
-                                        settings, work / "clips", seen, log)
+                clips += footage.gather([f"{s.name} {plan.city}"], settings, work / "clips", seen, log)
+        missing = min(4, lay["clips_per_place"] - len(clips))
+        if missing > 0 and broll:  # top up thin places with general destination footage
+            clips += [broll[(i * 3 + k) % len(broll)] for k in range(min(missing, len(broll)))]
         spot_clips.append(clips)
     if not any(spot_clips):
         sys.exit("No footage found for any place - check your API keys.")
 
     # 3. Voice
     log("3/5 voiceover")
-    voices = {"intro": speak(plan.intro_narration, work / "v_intro", settings, log),
-              "outro": speak(plan.outro_narration, work / "v_outro", settings, log)}
-    for i, s in enumerate(plan.spots):
-        voices[f"s{i}"] = speak(s.narration, work / f"v_s{i}", settings, log)
-    if len({p.suffix for p in voices.values()}) > 1:  # Gemini failed half-way: redo all in one voice
-        log("  re-recording everything with the Edge voice so the video has one voice")
-        edge = {**settings, "tts_engine": "edge"}
-        texts = {"intro": plan.intro_narration, "outro": plan.outro_narration,
-                 **{f"s{i}": s.narration for i, s in enumerate(plan.spots)}}
-        voices = {k: speak(t, work / f"v_{k}", edge, log) for k, t in texts.items()}
+    voices = record_voices({"intro": plan.intro_narration, "outro": plan.outro_narration,
+                            **{f"s{i}": s.narration for i, s in enumerate(plan.spots)}}, work, settings)
 
     # 4. Edit
-    log("4/5 editing")
+    log("4/5 editing the long video")
     credits = [c for cl in spot_clips for c in cl]
     video = build_video(plan, spot_clips, voices, credits, settings, work, out_dir, log)
+    log(f"  length: {duration(video) / 60:.1f} min")
     desc = description(plan, credits)
     (out_dir / "upload.txt").write_text(
         f"TITLE:\n{plan.title}\n\nDESCRIPTION:\n{desc}\n\nTAGS:\n{', '.join(plan.tags)}\n", encoding="utf-8")
 
     # 5. Upload
-    url = None
-    url_file = out_dir / "youtube_url.txt"
-    if args.no_upload or not settings.get("upload", {}).get("enabled"):
-        log("5/5 upload skipped")
-    elif url_file.exists():
-        url = url_file.read_text(encoding="utf-8").strip()
-        log(f"5/5 already uploaded: {url}")
-    else:
-        log("5/5 uploading to YouTube")
-        from youtube_upload import upload
-        try:
-            url = upload(video, out_dir / "thumbnail.jpg", plan.title, desc, plan.tags, settings, log)
-            url_file.write_text(url, encoding="utf-8")
-        except Exception as e:
-            log(f"  ! upload failed: {e}\n  The video is saved - upload it by hand with upload.txt")
+    log("5/5 upload")
+    url = publish(video, out_dir / "thumbnail.jpg", plan.title, desc, plan.tags, out_dir, settings, args)
 
-    record(dest["city"], out_dir, url)
+    # Bonus: the weekly Short
+    short_url = None
+    if settings.get("shorts", {}).get("enabled"):
+        short_url = make_short(plan, spot_clips, url, out_dir / "short", settings, args)
+
+    record(dest["city"], out_dir, url, short_url)
     log(f"\nDone!\n  video:     {video}\n  thumbnail: {out_dir / 'thumbnail.jpg'}\n  upload:    {out_dir / 'upload.txt'}"
-        + (f"\n  youtube:   {url}" if url else ""))
+        + (f"\n  youtube:   {url}" if url else "") + (f"\n  short:     {short_url}" if short_url else ""))
+
+
+def record_voices(texts: dict, work: Path, settings: dict) -> dict:
+    voices = {k: speak(t, work / f"v_{k}", settings, log) for k, t in texts.items()}
+    if len({p.suffix for p in voices.values()}) > 1:  # Gemini failed half-way: redo all in one voice
+        log("  re-recording everything with the Edge voice so the video has one voice")
+        edge = {**settings, "tts_engine": "edge"}
+        voices = {k: speak(t, work / f"v_{k}", edge, log) for k, t in texts.items()}
+    return voices
+
+
+def publish(video, thumbnail, title, desc, tags, folder: Path, settings, args):
+    url_file = folder / "youtube_url.txt"
+    if args.no_upload or not settings.get("upload", {}).get("enabled"):
+        log("  upload skipped")
+        return None
+    if url_file.exists():
+        url = url_file.read_text(encoding="utf-8").strip()
+        log(f"  already uploaded: {url}")
+        return url
+    from youtube_upload import upload
+    try:
+        url = upload(video, thumbnail, title, desc, tags, settings, log)
+        url_file.write_text(url, encoding="utf-8")
+        return url
+    except Exception as e:
+        log(f"  ! upload failed: {e}\n  The video is saved - upload it by hand with upload.txt")
+        return None
+
+
+def make_short(plan: VideoPlan, spot_clips, long_url, folder: Path, settings, args):
+    """A vertical YouTube Short teasing the long video, from its best places."""
+    beats = [b for b in plan.short_beats if spot_clips[b.spot - 1]]
+    if not beats or not plan.short_hook:
+        log("  (no Short in this plan - skipped)")
+        return None
+    log(f"Short: {len(beats)} places, vertical")
+    ss = {**settings, "orientation": "portrait", "cut_seconds": max(1.8, settings["cut_seconds"] * 0.7)}
+    work = folder / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    splan = VideoPlan(
+        city=plan.city, country=plan.country, title=plan.short_title or plan.title,
+        intro_narration=plan.short_hook, outro_narration=plan.short_outro or plan.outro_narration,
+        spots=[Spot(name=plan.spots[b.spot - 1].name, search_terms=[], narration=b.narration) for b in beats],
+        description=(f"Full video: {long_url}\n\n" if long_url else "") + plan.description.split("\n\n")[0],
+        tags=plan.tags)
+    clips = [spot_clips[b.spot - 1] for b in beats]
+    voices = record_voices({"intro": splan.intro_narration, "outro": splan.outro_narration,
+                            **{f"s{i}": s.narration for i, s in enumerate(splan.spots)}}, work, ss)
+    credits = [c for cl in clips for c in cl]
+    video = build_video(splan, clips, voices, credits, ss, work, folder, log)
+    secs = duration(video)
+    log(f"  Short length: {secs:.0f} s")
+    if secs > 180:
+        log("  ! longer than 3 minutes - YouTube will treat it as a normal video, not a Short")
+    desc = description(splan, credits) + "\n#shorts"
+    title = f"{splan.title[:88]} #shorts"
+    (folder / "upload.txt").write_text(f"TITLE:\n{title}\n\nDESCRIPTION:\n{desc}\n", encoding="utf-8")
+    return publish(video, None, title, desc, plan.tags, folder, settings, args)
 
 
 if __name__ == "__main__":
