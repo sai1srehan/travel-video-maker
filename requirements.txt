@@ -1,0 +1,7 @@
+google-genai
+pydantic>=2
+requests
+edge-tts
+imageio-ffmpeg
+yt-dlp
+python-dotenv
