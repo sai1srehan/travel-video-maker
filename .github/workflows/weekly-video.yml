@@ -31,6 +31,10 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - uses: denoland/setup-deno@v2   # yt-dlp needs a JavaScript runtime for YouTube
+        with:
+          deno-version: v2.x
+
       - run: pip install -r requirements.txt
 
       - name: Make video
@@ -40,6 +44,7 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
           CITY: ${{ inputs.city }}
           COUNTRY: ${{ inputs.country }}
           PORTRAIT: ${{ inputs.portrait }}
@@ -58,6 +63,7 @@ jobs:
             output/*/thumbnail.jpg
             output/*/upload.txt
             output/*/plan.json
+            output/*/youtube_url.txt
           retention-days: 30
 
       - name: Save history

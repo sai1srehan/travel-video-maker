@@ -1,8 +1,13 @@
 {
-  "language": "English",
-  "voice": "en-IN-PrabhatNeural",
+  "language": "Telugu",
+  "voice": "te-IN-MohanNeural",
   "voice_rate": "+5%",
   "orientation": "landscape",
+
+  "footage_mode": "top_cc_videos",
+  "source_videos": 2,
+  "fill_with_stock": true,
+
   "places_per_video": 5,
   "clips_per_place": 4,
   "cut_seconds": 3.0,
@@ -12,5 +17,11 @@
   "music_volume": 0.12,
   "color_grade": "eq=contrast=1.06:saturation=1.18:brightness=0.01",
   "font_file": "C:/Windows/Fonts/arialbd.ttf",
-  "host_style": "a warm, energetic Indian travel vlogger who mixes practical tips (best time to visit, entry fees, how to reach) with fun facts and history"
+  "host_style": "a warm, energetic Telugu travel vlogger who mixes practical tips (best time to visit, entry fees, how to reach) with fun facts and history",
+
+  "upload": {
+    "enabled": true,
+    "privacy": "private",
+    "category_id": "19"
+  }
 }

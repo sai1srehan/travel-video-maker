@@ -2,3 +2,6 @@
 __pycache__/
 output/*
 !output/history.json
+# YouTube login - never commit these
+client_secret*.json
+token.json

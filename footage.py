@@ -9,6 +9,7 @@ Regular (Standard YouTube License) videos are never downloaded.
 """
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,16 @@ class Clip:
     source: str
     credit: str
     url: str
+    start: float = 0.0          # usable window inside the file (seconds)
+    end: float | None = None    # None = to the end
+
+    @property
+    def window(self):
+        return self.start, (self.end if self.end is not None else self.duration)
+
+
+def yt_credit(title, channel, url):
+    return f"\"{title}\" by {channel} - CC BY, {url}"
 
 
 def _download(url: str, dest_dir: Path, prefix: str) -> Path:
@@ -107,8 +118,84 @@ def search_youtube_cc(query, n, days):
         vid = it["id"]["videoId"]
         sn = it["snippet"]
         url = f"https://www.youtube.com/watch?v={vid}"
-        out.append(("youtube", url, f"\"{sn['title']}\" by {sn['channelTitle']} - CC BY, {url}", url))
+        out.append(("youtube", url, yt_credit(sn["title"], sn["channelTitle"], url), url))
     return out
+
+
+def _iso_seconds(iso):
+    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return 0
+    d, h, mnt, s = (int(x or 0) for x in m.groups())
+    return d * 86400 + h * 3600 + mnt * 60 + s
+
+
+def top_cc_videos(query, n, min_minutes=3, max_minutes=25, log=print):
+    """Most-viewed Creative Commons (CC BY) YouTube videos for `query`.
+
+    The licence is checked twice: by the search filter and again per video (status.license).
+    Returns dicts: id, url, title, channel, views, seconds.
+    """
+    key = os.getenv("YOUTUBE_API_KEY")
+    if not key:
+        return []
+    r = requests.get("https://www.googleapis.com/youtube/v3/search",
+                     params={"part": "snippet", "q": query, "type": "video", "videoLicense": "creativeCommon",
+                             "order": "viewCount", "maxResults": 25, "key": key}, headers=UA, timeout=30)
+    r.raise_for_status()
+    ids = [it["id"]["videoId"] for it in r.json().get("items", [])]
+    if not ids:
+        return []
+    r = requests.get("https://www.googleapis.com/youtube/v3/videos",
+                     params={"part": "snippet,contentDetails,statistics,status", "id": ",".join(ids), "key": key},
+                     headers=UA, timeout=30)
+    r.raise_for_status()
+    out = []
+    for v in r.json().get("items", []):
+        st, sn = v.get("status", {}), v["snippet"]
+        secs = _iso_seconds(v["contentDetails"].get("duration"))
+        if st.get("license") != "creativeCommon" or st.get("privacyStatus") != "public":
+            continue
+        if not min_minutes * 60 <= secs <= max_minutes * 60:
+            continue  # too short to cut from, or too long for Gemini to watch cheaply
+        out.append({"id": v["id"], "url": f"https://www.youtube.com/watch?v={v['id']}",
+                    "title": sn["title"], "channel": sn["channelTitle"],
+                    "views": int(v.get("statistics", {}).get("viewCount", 0)), "seconds": float(secs)})
+    out.sort(key=lambda x: x["views"], reverse=True)
+    for x in out[:n]:
+        log(f"    source: {x['title']} - {x['channel']} ({x['views']:,} views, {x['seconds'] / 60:.0f} min)")
+    return out[:n]
+
+
+def download_sources(sources, dest_dir: Path, log=print):
+    """Download the plan's source videos. Returns {1-based index: (path, duration)}."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    got = {}
+    for i, s in enumerate(sources, 1):
+        try:
+            p = _download_youtube(s.url, dest_dir)
+        except Exception as e:
+            log(f"    could not download {s.url}: {e}")
+            continue
+        if p:
+            got[i] = (p, duration(p))
+            log(f"    + downloaded source {i} ({got[i][1]:.0f}s)")
+    return got
+
+
+def segment_clips(spot, sources, downloaded) -> list[Clip]:
+    """Turn a spot's Gemini timestamps into clips that point into the downloaded source videos."""
+    clips = []
+    for seg in spot.segments:
+        if seg.video not in downloaded:
+            continue
+        path, d = downloaded[seg.video]
+        start, end = max(0.0, seg.start), min(seg.end, d)
+        if end - start < 1.5:
+            continue
+        s = sources[seg.video - 1]
+        clips.append(Clip(path, d, "youtube", yt_credit(s.title, s.channel, s.url), s.url, start, end))
+    return clips
 
 
 def _download_youtube(url: str, dest_dir: Path) -> Path | None:

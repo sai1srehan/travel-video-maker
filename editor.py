@@ -49,11 +49,19 @@ def make_cuts(clips, total, settings, work: Path, tag: str, rng: random.Random):
     cuts = []
     for i in range(n):
         c = clips[i % len(clips)]
-        k = uses.get(c.path, 0)
-        uses[c.path] = k + 1
-        lo, hi = c.duration * 0.08, max(c.duration * 0.92 - L, c.duration * 0.08)
+        key = (c.path, c.start, c.end)
+        k = uses.get(key, 0)
+        uses[key] = k + 1
+        w0, w1 = c.window
+        if c.end is None:  # whole stock clip: skip its first/last 8%
+            span = w1 - w0
+            w0, w1 = w0 + span * 0.08, w1 - span * 0.08
+        lo, hi = w0, max(w1 - L, w0)
         frac = (0.2 + k * 0.37 + rng.uniform(-0.05, 0.05)) % 1.0
-        start = lo + frac * (hi - lo) if c.duration > L + 1 else 0
+        if w1 - w0 > L + 0.5:
+            start = lo + frac * (hi - lo)
+        else:  # short window: start at its beginning (whole short stock clip: from 0)
+            start = c.start if c.end is not None else 0
         pan = "(iw-ow)*t/{L}" if i % 2 == 0 else "(iw-ow)*(1-t/{L})"
         vf = (f"scale={_even(W * 1.08)}:{_even(H * 1.08)}:force_original_aspect_ratio=increase,"
               f"crop={W}:{H}:x='{pan.format(L=L)}':y='(ih-oh)/2',"
