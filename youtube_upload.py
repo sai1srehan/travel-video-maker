@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parent
 CLIENT = ROOT / "client_secret.json"
 TOKEN = ROOT / "token.json"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+LANGS = {"telugu": "te", "hindi": "hi", "tamil": "ta", "kannada": "kn", "malayalam": "ml",
+         "marathi": "mr", "bengali": "bn", "english": "en"}
 
 
 def login():
@@ -60,11 +62,14 @@ def upload(video: Path, thumbnail: Path | None, title: str, description: str, ta
 
     up = settings.get("upload", {})
     yt = build("youtube", "v3", credentials=_credentials(), cache_discovery=False)
-    body = {
-        "snippet": {"title": _clean(title, 100), "description": _clean(description, 5000),
-                    "tags": _fit_tags(tags), "categoryId": str(up.get("category_id", "19"))},
-        "status": {"privacyStatus": up.get("privacy", "private"), "selfDeclaredMadeForKids": False},
-    }
+    lang = LANGS.get(settings.get("language", "").lower())
+    snippet = {"title": _clean(title, 100), "description": _clean(description, 5000),
+               "tags": _fit_tags(tags), "categoryId": str(up.get("category_id", "19"))}
+    if lang:  # tells YouTube who to recommend it to (Telugu viewers)
+        snippet.update(defaultLanguage=lang, defaultAudioLanguage=lang)
+    body = {"snippet": snippet,
+            "status": {"privacyStatus": up.get("privacy", "public"), "selfDeclaredMadeForKids": False,
+                       "embeddable": True, "license": "youtube"}}
     media = MediaFileUpload(str(video), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
     request = yt.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
@@ -73,7 +78,14 @@ def upload(video: Path, thumbnail: Path | None, title: str, description: str, ta
         if status:
             log(f"  uploading... {int(status.progress() * 100)}%")
     vid = response["id"]
-    log(f"  uploaded: https://youtu.be/{vid} ({body['status']['privacyStatus']})")
+    wanted = body["status"]["privacyStatus"]
+    got = (response.get("status") or {}).get("privacyStatus", wanted)
+    log(f"  uploaded: https://youtu.be/{vid} ({got})")
+    if got != wanted:
+        log(f"  ! YouTube made this video {got.upper()} although we asked for {wanted}. This happens to every "
+            f"upload from a Google Cloud project that hasn't passed YouTube's API audit. Until then, open "
+            f"YouTube Studio -> Content and switch it to Public by hand. Apply (free) here: "
+            f"https://support.google.com/youtube/contact/yt_api_form")
 
     if thumbnail and Path(thumbnail).exists():
         try:

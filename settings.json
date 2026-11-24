@@ -33,7 +33,7 @@
 
   "upload": {
     "enabled": true,
-    "privacy": "private",
+    "privacy": "public",
     "category_id": "19"
   }
 }

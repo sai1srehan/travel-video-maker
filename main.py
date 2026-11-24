@@ -88,13 +88,44 @@ def write_plan(dest, settings):
     return make_plan(city, country, settings)
 
 
-def description(plan, credits, spot_clips=None):
+def chapters(plan, voices, spot_clips) -> list[str]:
+    """YouTube chapters (0:00 Intro, 0:12 1. Amber Fort ...) from the real section lengths."""
+    from editor import PAD
+    t, out, num = 0.0, [], 0
+
+    def stamp(s):
+        s = int(s)
+        return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+    marks = [(0.0, "Intro")]
+    t += duration(voices["intro"]) + PAD
+    for i, s in enumerate(plan.spots):
+        if spot_clips[i] and f"s{i}" in voices:
+            num += 1
+            marks.append((t, f"{num}. {s.name}"))
+            t += duration(voices[f"s{i}"]) + PAD
+    marks.append((t, "Outro"))
+    # YouTube ignores ALL chapters if one is under 10 s: fold a short intro into the first place,
+    # and a short outro into the last one
+    if len(marks) > 1 and marks[1][0] < 10:
+        marks = [(0.0, marks[1][1])] + marks[2:]
+    end = duration(voices["outro"]) + PAD
+    if end < 10:
+        marks = marks[:-1]
+    out = [f"{stamp(m)} {name}" for m, name in marks]
+    return out if len(out) >= 3 else []
+
+
+def description(plan, credits, spot_clips=None, chapter_lines=None):
     yt = list({c.url: c for c in credits if c.source == "youtube"}.values())  # one credit per video
     wiki = sorted({c.credit for c in credits if c.source == "wikimedia"})
     stock = sorted({c.credit for c in credits if c.source in ("pexels", "pixabay")})
-    desc = [plan.description, "", "Places in this video:"]
-    shown = [s for i, s in enumerate(plan.spots) if spot_clips is None or spot_clips[i]]
-    desc += [f"{i + 1}. {s.name}" for i, s in enumerate(shown)]
+    desc = [plan.description, ""]
+    if chapter_lines:
+        desc += ["Chapters:"] + chapter_lines
+    else:
+        shown = [s for i, s in enumerate(plan.spots) if spot_clips is None or spot_clips[i]]
+        desc += ["Places in this video:"] + [f"{i + 1}. {s.name}" for i, s in enumerate(shown)]
     if yt:
         desc += ["", f"Footage used under Creative Commons Attribution (CC BY 3.0, {CC_BY}).",
                  "Clips were trimmed, re-edited, colour graded and given new narration. Original videos:"]
@@ -199,7 +230,7 @@ def main():
     credits = [c for cl in spot_clips for c in cl]
     video = build_video(plan, spot_clips, voices, credits, settings, work, out_dir, log)
     log(f"  length: {duration(video) / 60:.1f} min")
-    desc = description(plan, credits, spot_clips)
+    desc = description(plan, credits, spot_clips, chapters(plan, voices, spot_clips))
     (out_dir / "upload.txt").write_text(
         f"TITLE:\n{plan.title}\n\nDESCRIPTION:\n{desc}\n\nTAGS:\n{', '.join(plan.tags)}\n", encoding="utf-8")
 
