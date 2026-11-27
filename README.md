@@ -1,7 +1,7 @@
-# Weekly Telugu Travel Video Maker
+# Daily Telugu Travel Video Maker
 
-Runs on GitHub every Sunday, no PC needed. It's completely free (all services used have free tiers).
-Every week it uploads a **~20-minute video** (set 12-30 in `settings.json`) plus a **2-minute vertical Short**
+Runs on GitHub every day at 14:00 IST, no PC needed. It's completely free (all services used have free tiers).
+Every day it uploads a **~20-minute video** (set 12-30 in `settings.json`) plus a **2-minute vertical Short**
 that teases it and links to it. For each week's destination it:
 
 1. **Script:** Gemini picks the best places and writes a Telugu voiceover that sounds like a
@@ -45,7 +45,7 @@ Never commit `client_secret.json` or `token.json` (they're in `.gitignore`).
 1. Push this folder to your repo.
 2. **Settings → Secrets and variables → Actions**: add the secrets above.
 3. **Settings → Actions → General → Workflow permissions → Read and write**.
-4. **Actions → Weekly travel video → Run workflow** to test. Type a place (e.g. `Malaysia`) or leave it empty.
+4. **Actions → Daily travel video → Run workflow** to test. Type a place (e.g. `Malaysia`) or leave it empty.
    Tip: for the first test, type `5` in **minutes** so it finishes quickly. A 20-minute video takes about 1-2 hours on GitHub.
 
 ### 4. Music (recommended)
@@ -75,7 +75,7 @@ pick ones marked "no attribution required") and upload them to `assets/music/` i
 | `voice`, `voice_rate` | Backup Edge voice: `te-IN-MohanNeural` or `te-IN-ShrutiNeural` |
 | `target_minutes` | Long video length (12-30). Number of places, narration and footage scale with it |
 | `words_per_second` | Speaking speed used to size the script; raise it if videos come out longer than wanted |
-| `shorts.enabled`, `shorts.seconds`, `shorts.places` | The weekly vertical Short (max 180 s) |
+| `shorts.enabled`, `shorts.seconds`, `shorts.places` | The daily vertical Short (max 180 s) |
 | `cut_seconds`, `camera_move_share` | Average shot length; share of shots with slow camera drift (0-1) |
 | `color_grade` | ffmpeg colour filter applied to every shot |
 | `use_wikimedia` | Use Wikimedia Commons footage |

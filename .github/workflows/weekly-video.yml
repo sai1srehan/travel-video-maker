@@ -1,8 +1,8 @@
-name: Weekly travel video
+name: Daily travel video
 
 on:
   schedule:
-    - cron: "30 3 * * 0"   # every Sunday 03:30 UTC (09:00 IST)
+    - cron: "30 8 * * *"   # every day 08:30 UTC (14:00 IST) -> on YouTube by ~16:00 IST, before the evening peak
   workflow_dispatch:
     inputs:
       city:
@@ -16,7 +16,11 @@ on:
         required: false
 
 permissions:
-  contents: write   # to commit output/history.json so next week picks a new place
+  contents: write   # to commit output/history.json so the next run picks a new place
+
+concurrency:
+  group: travel-video   # never two runs at once (they'd pick the same place)
+  cancel-in-progress: false
 
 jobs:
   make-video:
@@ -89,6 +93,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add output/history.json
-          git commit -m "Weekly video: update history" || echo "nothing to commit"
+          git commit -m "Daily video: update history" || echo "nothing to commit"
           git pull --rebase
           git push

@@ -31,6 +31,8 @@
   "music_file": "assets/music.mp3",
   "music_volume": 0.12,
 
+  "channel_hashtags": ["#TeluguTravelVlogs", "#TeluguVlogs", "#TeluguTravel", "#Telugu"],
+
   "upload": {
     "enabled": true,
     "privacy": "public",

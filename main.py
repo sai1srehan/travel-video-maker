@@ -44,12 +44,13 @@ def log(msg):  # elapsed minutes in front, so a slow step is easy to spot in the
 def pick_destination():
     dests = json.loads((ROOT / "destinations.json").read_text(encoding="utf-8"))
     history = json.loads(HISTORY.read_text(encoding="utf-8")) if HISTORY.exists() else []
-    used = {h["city"] for h in history}
+    last = {}
+    for h in history:
+        last[h["city"]] = h.get("date", "")
     for d in dests:
-        if d["city"] not in used:
+        if d["city"] not in last:
             return d
-    week = date.today().isocalendar()
-    return dests[(week.year * 53 + week.week) % len(dests)]  # all used: start cycling
+    return min(dests, key=lambda d: last[d["city"]])  # all used: the one done longest ago
 
 
 def record(city, folder, url=None, short_url=None):
@@ -116,7 +117,7 @@ def chapters(plan, voices, spot_clips) -> list[str]:
     return out if len(out) >= 3 else []
 
 
-def description(plan, credits, spot_clips=None, chapter_lines=None):
+def description(plan, credits, spot_clips=None, chapter_lines=None, settings=None, short=False):
     yt = list({c.url: c for c in credits if c.source == "youtube"}.values())  # one credit per video
     wiki = sorted({c.credit for c in credits if c.source == "wikimedia"})
     stock = sorted({c.credit for c in credits if c.source in ("pexels", "pixabay")})
@@ -134,8 +135,27 @@ def description(plan, credits, spot_clips=None, chapter_lines=None):
         desc += ["", "Wikimedia Commons footage (edited):"] + [f"- {w}" for w in wiki]
     if stock:
         desc += ["", "Stock footage: " + ", ".join(stock)]
-    desc += ["", " ".join("#" + re.sub(r"\W+", "", t) for t in plan.tags[:8])]
-    return "\n".join(desc)
+    tags = hashtags(plan, settings or {}, short)
+    return "\n".join(desc + ["", " ".join(tags)])
+
+
+def hashtags(plan, settings, short=False) -> list[str]:
+    """Place hashtags from Gemini + the channel's own, deduplicated.
+
+    YouTube shows the first 3 above the title, and ignores ALL hashtags if there are more than 15,
+    so we keep it to about 10.
+    """
+    raw = list(plan.hashtags or []) or [plan.city, f"{plan.city} tour", plan.country]
+    raw += settings.get("channel_hashtags", ["#TeluguTravelVlogs", "#TeluguVlogs", "#Telugu", "#Travel"])
+    if short:
+        raw = ["#shorts"] + raw
+    out, seen = [], set()
+    for t in raw:
+        t = "#" + re.sub(r"[^\w]+", "", t.lstrip("#"), flags=re.UNICODE)
+        if len(t) > 2 and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:10]
 
 
 def main():
@@ -160,9 +180,8 @@ def main():
         sys.exit("Add GEMINI_API_KEY to .env (get one at https://aistudio.google.com/apikey)")
 
     dest = {"city": args.city, "country": args.country} if args.city else pick_destination()
-    wk = date.today().isocalendar()
     slug = re.sub(r"[^a-z0-9]+", "-", dest["city"].lower()).strip("-")
-    out_dir = ROOT / "output" / f"{wk.year}-W{wk.week:02d}_{slug}"
+    out_dir = ROOT / "output" / f"{date.today().isoformat()}_{slug}"
     work = out_dir / "work"
     work.mkdir(parents=True, exist_ok=True)
     log(f"== {dest['city']}, {dest['country']}  ->  {out_dir}")
@@ -230,7 +249,7 @@ def main():
     credits = [c for cl in spot_clips for c in cl]
     video = build_video(plan, spot_clips, voices, credits, settings, work, out_dir, log)
     log(f"  length: {duration(video) / 60:.1f} min")
-    desc = description(plan, credits, spot_clips, chapters(plan, voices, spot_clips))
+    desc = description(plan, credits, spot_clips, chapters(plan, voices, spot_clips), settings)
     (out_dir / "upload.txt").write_text(
         f"TITLE:\n{plan.title}\n\nDESCRIPTION:\n{desc}\n\nTAGS:\n{', '.join(plan.tags)}\n", encoding="utf-8")
 
@@ -291,7 +310,7 @@ def make_short(plan: VideoPlan, spot_clips, long_url, folder: Path, settings, ar
         intro_narration=plan.short_hook, outro_narration=plan.short_outro or plan.outro_narration,
         spots=[Spot(name=plan.spots[b.spot - 1].name, search_terms=[], narration=b.narration) for b in beats],
         description=(f"Full video: {long_url}\n\n" if long_url else "") + plan.description.split("\n\n")[0],
-        tags=plan.tags)
+        tags=plan.tags, hashtags=plan.hashtags)
     clips = [spot_clips[b.spot - 1] for b in beats]
     voices = record_voices({"intro": splan.intro_narration, "outro": splan.outro_narration,
                             **{f"s{i}": s.narration for i, s in enumerate(splan.spots)}}, work, ss)
@@ -301,8 +320,9 @@ def make_short(plan: VideoPlan, spot_clips, long_url, folder: Path, settings, ar
     log(f"  Short length: {secs:.0f} s")
     if secs > 180:
         log("  ! longer than 3 minutes - YouTube will treat it as a normal video, not a Short")
-    desc = description(splan, credits, clips) + "\n#shorts"
-    title = f"{splan.title[:88]} #shorts"
+    desc = description(splan, credits, clips, settings=settings, short=True)
+    top = hashtags(splan, settings)[0] if hashtags(splan, settings) else ""
+    title = f"{splan.title[:100 - len(top) - 10].strip()} {top} #shorts".replace("  ", " ")
     (folder / "upload.txt").write_text(f"TITLE:\n{title}\n\nDESCRIPTION:\n{desc}\n", encoding="utf-8")
     return publish(video, None, title, desc, plan.tags, folder, settings, args)
 

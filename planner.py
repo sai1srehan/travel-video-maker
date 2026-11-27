@@ -55,6 +55,7 @@ class VideoPlan(BaseModel):
     outro_narration: str
     description: str
     tags: list[str]
+    hashtags: list[str] = []
     broll_terms: list[str] = []
     short_title: str = ""
     short_hook: str = ""
@@ -119,7 +120,12 @@ class _Script(BaseModel):
     spots: list[_Spot]
     outro_narration: str = Field(description="Sign-off asking viewers to like/subscribe, 15-25 words")
     description: str = Field(description="YouTube description, 2-3 short paragraphs")
-    tags: list[str] = Field(description="10-15 YouTube tags")
+    tags: list[str] = Field(description="10-15 YouTube tags: mix English and Telugu-audience searches, e.g. "
+                                        "'jaipur tour telugu', 'jaipur in telugu', 'jaipur budget trip', "
+                                        "'rajasthan tourism', 'telugu travel vlog'")
+    hashtags: list[str] = Field(description="4-6 hashtags people actually search, most important first, "
+                                            "no spaces, e.g. ['#Jaipur', '#JaipurTour', '#Rajasthan', "
+                                            "'#JaipurInTelugu', '#HawaMahal']. Only real, relevant ones")
     broll_terms: list[str] = Field(
         description="8-12 short English search phrases for general footage of the destination, no single landmark: "
                     "streets, local food, markets, transport, skyline, sunset, nature, people, e.g. "
